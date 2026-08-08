@@ -189,7 +189,8 @@ class Notification(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id"), index=True)
-    type: Mapped[str] = mapped_column(String(16))  # NEW | SUPPLEMENT | REPEAT | ESCALATION | CLOSURE
+    type: Mapped[str] = mapped_column(String(16))
+    # NEW | SUPPLEMENT | REPEAT | ESCALATION | CLOSURE | SCENARIO | SLA_BREACH
     chat_id: Mapped[str] = mapped_column(String(128))
     message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | sent | failed
@@ -407,10 +408,12 @@ class SLARule(Base):
 
 class Scenario(Base):
     """Раздел «Сценарии» — визуальный no-code конструктор (ReactFlow).
-    Этап 1: граф сохраняется и читается целиком как JSON — редактор и
-    исполнение (интерпретатор графа, реально влияющий на маршрутизацию)
-    сознательно отложены на Этап 2, чтобы не выдавать несуществующую
-    автоматизацию за рабочую."""
+    graph_json — узлы/рёбра как их сохранил редактор. Этап 2:
+    packages/scenarios/engine.py на ИСПОЛНЕНИЕ приводит граф к линейной
+    цепочке шагов (Условие → Уведомить → [Подождать → Уведомить]*) —
+    осознанное упрощение, не полный интерпретатор с ветвлением/циклами
+    (см. план платформы). status='active' — единственное, что реально
+    участвует в доставке; 'draft' сохраняется, но не исполняется."""
     __tablename__ = "scenarios"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -421,3 +424,35 @@ class Scenario(Base):
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     updated_at: Mapped[datetime] = mapped_column(DateTime)
+
+
+class ScenarioRun(Base):
+    """Раздел «Сценарии», Этап 2 — состояние исполнения одного активного
+    сценария на одной проблеме: на каком шаге линейной цепочки мы сейчас
+    и когда в него вошли (нужно для шагов «Подождать»). Один прогон на
+    пару (сценарий, проблема) — повторный проход конвейера не плодит
+    дублей."""
+    __tablename__ = "scenario_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scenario_id: Mapped[int] = mapped_column(ForeignKey("scenarios.id"), index=True)
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id"), index=True)
+    current_step_index: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(16), default="running")  # running | done
+    step_entered_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+
+    __table_args__ = (UniqueConstraint("scenario_id", "problem_id", name="uq_scenario_run_scenario_problem"),)
+
+
+class SlaBreachNotice(Base):
+    """Раздел «SLA», Этап 2 — «уже напомнили по этой проблеме» (одно
+    напоминание за жизненный цикл проблемы, не спамим на каждый тик)."""
+    __tablename__ = "sla_breach_notices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id"), index=True)
+    sla_rule_id: Mapped[int] = mapped_column(ForeignKey("sla_rules.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+
+    __table_args__ = (UniqueConstraint("problem_id", name="uq_sla_breach_notice_problem"),)

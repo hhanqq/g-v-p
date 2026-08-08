@@ -36,13 +36,15 @@ from trueconf.utils._token import _get_auth_token
 
 from packages.ai.recommend import checklist_for, recommend_remediation
 from packages.common.db import engine, get_session
-from packages.common.routing import resolve_recipients
+from packages.common.routing import owning_service_ids, owning_subsidiaries, resolve_recipients
 from packages.models.db import (Base, CmdbObject, CmdbService, CmdbServiceObject,
-                                 Event, Incident, IncidentProblem, Notification, Problem, Signal,
-                                 Subscriber, Subscription)
+                                 Event, Incident, IncidentProblem, Notification, Problem, Scenario,
+                                 ScenarioRun, Signal, SLARule, SlaBreachNotice, Subscriber, Subscription)
+from packages.scenarios.engine import matches_condition, next_action, parse_chain
 from services.delivery_trueconf.llm_summary import build_prompt, summarize_incident
 from services.delivery_trueconf.templates import (format_duration, render_closure,
                                                     render_duplicate_note, render_new,
+                                                    render_scenario_notify, render_sla_breach,
                                                     render_supplement)
 
 TRUECONF_SERVER = os.environ["TRUECONF_SERVER"]
@@ -329,6 +331,164 @@ def claim_pending_supplements(session) -> list[tuple[int, int, int, str, str | N
     return claimed
 
 
+async def send_scenario_notify(bot: Bot, session, *, problem: Problem, scenario: Scenario,
+                                chat_id: str, is_escalation: bool) -> None:
+    notification = Notification(problem_id=problem.id, type="SCENARIO", chat_id=chat_id,
+                                 status="queued", created_at=datetime.utcnow())
+    session.add(notification)
+    session.commit()  # раздел 9.8 п.1 — в очереди ДО отправки, тот же принцип, что и у NEW/CLOSURE
+    text = render_scenario_notify(
+        problem_id=problem.id, incident_id=problem.incident_id, scenario_name=scenario.name,
+        object_name=_object_display(session, problem.object_id), is_escalation=is_escalation,
+    )
+    try:
+        resp = await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+        notification.message_id = resp.message_id
+        notification.status = "sent"
+        notification.sent_at = datetime.utcnow()
+    except Exception as exc:  # noqa: BLE001
+        notification.status = "failed"
+        notification.error = str(exc)[:2000]
+    session.commit()
+
+
+async def run_scenarios(bot: Bot, session, domain: str) -> None:
+    """Раздел «Сценарии», Этап 2 — packages/scenarios/engine.py на каждый
+    тик продвигает активные сценарии по открытым проблемам. В отличие от
+    SUPPLEMENT здесь нет обращения к LLM, поэтому фоновая задача не нужна —
+    отправка идёт синхронно внутри самого тика (см. план платформы)."""
+    now = datetime.utcnow()
+    active_scenarios = session.execute(select(Scenario).where(Scenario.status == "active")).scalars().all()
+    if not active_scenarios:
+        return
+    open_problems = session.execute(
+        select(Problem).where(Problem.status.in_(("OPEN", "FLAPPING")))
+    ).scalars().all()
+    if not open_problems:
+        return
+
+    for scenario in active_scenarios:
+        chain = parse_chain(scenario.graph_json)
+        if chain is None:
+            continue  # раздел И5 — сценарий с графом, не сводящимся к цепочке, просто не исполняется
+        condition = chain[0]
+        for problem in open_problems:
+            run = session.execute(
+                select(ScenarioRun).where(ScenarioRun.scenario_id == scenario.id,
+                                           ScenarioRun.problem_id == problem.id)
+            ).scalars().first()
+            if run is None:
+                owning = owning_subsidiaries(session, problem)
+                if not matches_condition(condition, problem, owning):
+                    continue
+                run = ScenarioRun(scenario_id=scenario.id, problem_id=problem.id,
+                                   current_step_index=0, status="running",
+                                   step_entered_at=now, created_at=now)
+                session.add(run)
+                session.flush()
+            if run.status != "running":
+                continue
+
+            outcome, step, new_index, new_entered_at = next_action(
+                run.current_step_index, run.step_entered_at, chain, problem.status, now,
+            )
+            if outcome == "wait":
+                run.current_step_index, run.step_entered_at = new_index, new_entered_at
+                session.commit()
+                continue
+            if outcome == "done":
+                run.status, run.current_step_index = "done", new_index
+                session.commit()
+                continue
+
+            # outcome == "notify" — шаг сразу помечается пройденным (до отправки),
+            # чтобы сбой сети не заставил повторять его на каждом следующем тике.
+            # Позиция уведомления в цепочке (new_index - 1): 1 — первое, сразу
+            # после условия; больше 1 — эскалация после хотя бы одного «Подождать».
+            is_escalation = (new_index - 1) > 1
+            run.current_step_index, run.step_entered_at = new_index, new_entered_at
+            session.commit()
+
+            employee_id = step.get("employee_id")
+            subscriber = session.get(Subscriber, employee_id) if employee_id else None
+            if subscriber is None or not subscriber.active:
+                continue  # некого уведомлять — раздел И5, не ошибка, просто пропуск шага
+            try:
+                chat_id = await get_chat_id(bot, subscriber.trueconf_username, domain)
+                await send_scenario_notify(bot, session, problem=problem, scenario=scenario,
+                                            chat_id=chat_id, is_escalation=is_escalation)
+            except Exception as exc:  # noqa: BLE001
+                print(f"delivery_trueconf: ошибка SCENARIO для problem={problem.id} "
+                      f"scenario={scenario.id}: {exc}")
+
+
+def _matching_sla_rule(session, problem: Problem) -> SLARule | None:
+    """Самое специфичное подходящее правило: филиал+сервис точнее, чем
+    просто приоритет — та же идея специфичности, что и в resolve_recipients
+    (packages/common/routing.py), только считаем не получателей, а порог."""
+    if not problem.priority:
+        return None
+    owning_subs = owning_subsidiaries(session, problem)
+    owning_services = owning_service_ids(session, problem)
+    candidates: list[tuple[int, SLARule]] = []
+    for rule in session.execute(select(SLARule).where(SLARule.priority == problem.priority)).scalars().all():
+        if rule.subsidiary and rule.subsidiary not in owning_subs:
+            continue
+        if rule.service_id and rule.service_id not in owning_services:
+            continue
+        specificity = (rule.subsidiary is not None) + (rule.service_id is not None)
+        candidates.append((specificity, rule))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda pair: pair[0])[1]
+
+
+async def run_sla_breaches(bot: Bot, session, domain: str) -> None:
+    """Раздел «SLA», Этап 2 — открытая проблема, чей возраст превышает
+    response_minutes подходящего правила, получает ОДНО напоминание за
+    жизненный цикл (SlaBreachNotice — раздел И5/9.8-стиль идемпотентность,
+    не спамим на каждый тик)."""
+    now = datetime.utcnow()
+    already = set(session.execute(select(SlaBreachNotice.problem_id)).scalars().all())
+    open_problems = session.execute(
+        select(Problem).where(Problem.status.in_(("OPEN", "FLAPPING")))
+    ).scalars().all()
+    for problem in open_problems:
+        if problem.id in already:
+            continue
+        rule = _matching_sla_rule(session, problem)
+        if rule is None:
+            continue
+        age_minutes = int((now - problem.opened_at).total_seconds() // 60)
+        if age_minutes < rule.response_minutes:
+            continue
+
+        notice = SlaBreachNotice(problem_id=problem.id, sla_rule_id=rule.id, created_at=now)
+        session.add(notice)
+        session.commit()  # раздел 9.8 п.1 — помечено ДО рассылки, повторный тик не найдёт эту проблему снова
+
+        text = render_sla_breach(
+            problem_id=problem.id, incident_id=problem.incident_id,
+            object_name=_object_display(session, problem.object_id), priority=problem.priority,
+            age_minutes=age_minutes, threshold_minutes=rule.response_minutes, rule_name=rule.name,
+        )
+        for username in resolve_recipients(session, problem):
+            try:
+                chat_id = await get_chat_id(bot, username, domain)
+                notification = Notification(problem_id=problem.id, type="SLA_BREACH", chat_id=chat_id,
+                                             status="queued", created_at=datetime.utcnow())
+                session.add(notification)
+                session.commit()
+                resp = await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
+                notification.message_id = resp.message_id
+                notification.status = "sent"
+                notification.sent_at = datetime.utcnow()
+                session.commit()
+            except Exception as exc:  # noqa: BLE001
+                print(f"delivery_trueconf: ошибка SLA_BREACH для problem={problem.id} "
+                      f"recipient={username}: {exc}")
+
+
 _chat_cache: dict[str, str] = {}
 
 
@@ -406,6 +566,11 @@ async def delivery_tick(bot: Bot, domain: str) -> None:
                 bot, incident_id=incident_id, root_problem_id=root_problem_id,
                 notification_id=notification_id, chat_id=sup_chat_id, reply_message_id=reply_id,
             ))
+
+        # Раздел «Сценарии»/«SLA», Этап 2 — синхронно (без LLM, фоновая
+        # задача не нужна, см. docstring run_scenarios).
+        await run_scenarios(bot, session, domain)
+        await run_sla_breaches(bot, session, domain)
 
 
 async def delivery_loop(bot: Bot, domain: str) -> None:

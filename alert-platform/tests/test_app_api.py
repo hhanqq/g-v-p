@@ -133,3 +133,71 @@ def test_stub_endpoints_smoke():
     assert "TrueConf" in names
     hr_row = next(i for i in integrations.json() if "HR" in i["name"])
     assert hr_row["status"] == "open_question"  # честно, не выдуманная интеграция
+
+
+_VALID_GRAPH = ('{"nodes": ['
+                '{"id": "1", "type": "condition", "data": {"priority_min": "P1"}}, '
+                '{"id": "2", "type": "notify", "data": {"employee_id": 1}}], '
+                '"edges": [{"source": "1", "target": "2"}]}')
+_BRANCHING_GRAPH = ('{"nodes": ['
+                     '{"id": "1", "type": "condition", "data": {}}, '
+                     '{"id": "2", "type": "notify", "data": {}}, '
+                     '{"id": "3", "type": "notify", "data": {}}], '
+                     '"edges": [{"source": "1", "target": "2"}, {"source": "1", "target": "3"}]}')
+
+
+def test_scenario_crud_and_activate_flow():
+    _login()
+    created = client.post("/api/scenarios", json={"name": "Ночная эскалация", "graph_json": _VALID_GRAPH})
+    assert created.status_code == 200
+    scenario_id = created.json()["id"]
+
+    detail = client.get(f"/api/scenarios/{scenario_id}")
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "draft"
+    assert detail.json()["name"] == "Ночная эскалация"
+
+    activated = client.post(f"/api/scenarios/{scenario_id}/activate")
+    assert activated.status_code == 200
+    assert client.get(f"/api/scenarios/{scenario_id}").json()["status"] == "active"
+
+    deactivated = client.post(f"/api/scenarios/{scenario_id}/deactivate")
+    assert deactivated.status_code == 200
+    assert client.get(f"/api/scenarios/{scenario_id}").json()["status"] == "draft"
+
+
+def test_scenario_activate_rejects_graph_that_is_not_a_chain():
+    _login()
+    created = client.post("/api/scenarios", json={"name": "Ветвление", "graph_json": _BRANCHING_GRAPH})
+    scenario_id = created.json()["id"]
+    resp = client.post(f"/api/scenarios/{scenario_id}/activate")
+    assert resp.status_code == 400
+    assert client.get(f"/api/scenarios/{scenario_id}").json()["status"] == "draft"
+
+
+def test_scenario_update_deactivates_active_scenario_on_graph_change():
+    _login()
+    created = client.post("/api/scenarios", json={"name": "Правка на лету", "graph_json": _VALID_GRAPH})
+    scenario_id = created.json()["id"]
+    client.post(f"/api/scenarios/{scenario_id}/activate")
+    assert client.get(f"/api/scenarios/{scenario_id}").json()["status"] == "active"
+
+    updated = client.put(f"/api/scenarios/{scenario_id}", json={"graph_json": _VALID_GRAPH})
+    assert updated.status_code == 200
+    # раздел И5 — изменённый граф не проверен заново, активный статус снимается
+    assert client.get(f"/api/scenarios/{scenario_id}").json()["status"] == "draft"
+
+
+def test_scenario_get_404_for_unknown_id():
+    _login()
+    assert client.get("/api/scenarios/999999").status_code == 404
+
+
+def test_sla_rule_create_and_list():
+    _login()
+    created = client.post("/api/sla-rules", json={
+        "name": "P0 критично", "priority": "P0", "response_minutes": 15, "resolution_minutes": 120,
+    })
+    assert created.status_code == 200
+    listed = client.get("/api/sla-rules").json()
+    assert any(r["name"] == "P0 критично" and r["response_minutes"] == 15 for r in listed)

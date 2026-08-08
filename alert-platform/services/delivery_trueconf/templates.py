@@ -99,6 +99,34 @@ def render_duplicate_note(*, duplicate_problem_id: int, original_problem_id: int
     )
 
 
+def render_scenario_notify(*, problem_id: int, incident_id: int | None, scenario_name: str,
+                            object_name: str, is_escalation: bool) -> str:
+    """Раздел «Сценарии», Этап 2 — уведомление по шагу линейной цепочки
+    (packages/scenarios/engine.py). is_escalation=True — это шаг ПОСЛЕ
+    «Подождать» (дедлайн истёк раньше, чем проблема решилась), не первое
+    уведомление сценария."""
+    did = display_id(problem_id, incident_id)
+    kind = "ЭСКАЛАЦИЯ ПО СЦЕНАРИЮ" if is_escalation else "СЦЕНАРИЙ"
+    return (
+        f"🟣 <b>{kind}: {scenario_name}</b> · {did}\n"
+        f"Объект: {object_name}"
+    )
+
+
+def render_sla_breach(*, problem_id: int, incident_id: int | None, object_name: str,
+                       priority: str | None, age_minutes: int, threshold_minutes: int,
+                       rule_name: str) -> str:
+    """Раздел «SLA», Этап 2 — напоминание, что проблема в работе дольше
+    норматива реагирования правила. Факты (сколько прошло, какой порог),
+    не домысел — тот же принцип, что и в остальных шаблонах файла."""
+    did = display_id(problem_id, incident_id)
+    return (
+        f"⏰ <b>НАРУШЕН SLA · {did}</b>\n"
+        f"{object_name} · приоритет {priority or '?'}\n"
+        f"В работе {age_minutes} мин · порог реагирования по правилу «{rule_name}» — {threshold_minutes} мин"
+    )
+
+
 def format_duration(seconds: float) -> str:
     seconds = int(seconds)
     h, rem = divmod(seconds, 3600)

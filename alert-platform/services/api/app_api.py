@@ -21,6 +21,7 @@ from packages.common.audit import log_action
 from packages.common.db import get_session
 from packages.models.db import (CmdbObject, EmployeeAvailability, Event, Incident, IncidentProblem,
                                  Problem, SLARule, Scenario, Signal, Subscriber, Subscription)
+from packages.scenarios.engine import parse_chain
 from services.api import metrics
 
 router = APIRouter(prefix="/api")
@@ -263,7 +264,11 @@ def set_employee_availability(employee_id: int, payload: AvailabilityRequest,
         return {"ok": True, "id": row.id}
 
 
-# --- Заглушки: Сценарии / SLA / Интеграции (полная реализация — Этап 2) --------
+# --- Сценарии (раздел «Сценарии», Этап 2 — редактор + исполнение) --------------
+# Исполнение самого графа — packages/scenarios/engine.py, вызывается из
+# services/delivery_trueconf/main.py::run_scenarios. Здесь только CRUD +
+# активация (с серверной валидацией через parse_chain — раздел И5: кривой
+# граф не должен молча "исполняться" никак).
 
 @router.get("/scenarios")
 def list_scenarios(user: dict = Depends(session_auth.require_session_user)) -> list[dict]:
@@ -273,14 +278,129 @@ def list_scenarios(user: dict = Depends(session_auth.require_session_user)) -> l
                  "updated_at": r.updated_at.isoformat()} for r in rows]
 
 
+@router.get("/scenarios/{scenario_id}")
+def get_scenario(scenario_id: int, user: dict = Depends(session_auth.require_session_user)) -> dict:
+    with get_session() as session:
+        row = session.get(Scenario, scenario_id)
+        if row is None:
+            raise HTTPException(404, "Сценарий не найден")
+        return {"id": row.id, "name": row.name, "description": row.description,
+                "graph_json": row.graph_json, "status": row.status, "created_by": row.created_by,
+                "updated_at": row.updated_at.isoformat()}
+
+
+class ScenarioCreateRequest(BaseModel):
+    name: str
+    description: str | None = None
+    graph_json: str
+
+
+@router.post("/scenarios")
+def create_scenario(payload: ScenarioCreateRequest,
+                     user: dict = Depends(session_auth.require_session_user)) -> dict:
+    with get_session() as session:
+        now = datetime.utcnow()
+        row = Scenario(name=payload.name, description=payload.description, graph_json=payload.graph_json,
+                        status="draft", created_by=user["username"], created_at=now, updated_at=now)
+        session.add(row)
+        session.commit()
+        log_action(session, actor=user["username"], action="create_scenario", target=row.name)
+        return {"ok": True, "id": row.id}
+
+
+class ScenarioUpdateRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    graph_json: str | None = None
+
+
+@router.put("/scenarios/{scenario_id}")
+def update_scenario(scenario_id: int, payload: ScenarioUpdateRequest,
+                     user: dict = Depends(session_auth.require_session_user)) -> dict:
+    with get_session() as session:
+        row = session.get(Scenario, scenario_id)
+        if row is None:
+            raise HTTPException(404, "Сценарий не найден")
+        if payload.name is not None:
+            row.name = payload.name
+        if payload.description is not None:
+            row.description = payload.description
+        if payload.graph_json is not None:
+            row.graph_json = payload.graph_json
+            if row.status == "active":
+                # раздел И5 — граф изменился, старая проверка parse_chain
+                # больше не гарантированно верна: снимаем с исполнения,
+                # пока не подтвердят заново через /activate.
+                row.status = "draft"
+        row.updated_at = datetime.utcnow()
+        session.commit()
+        return {"ok": True, "status": row.status}
+
+
+@router.post("/scenarios/{scenario_id}/activate")
+def activate_scenario(scenario_id: int, user: dict = Depends(session_auth.require_session_user)) -> dict:
+    with get_session() as session:
+        row = session.get(Scenario, scenario_id)
+        if row is None:
+            raise HTTPException(404, "Сценарий не найден")
+        if parse_chain(row.graph_json) is None:
+            raise HTTPException(
+                400, "Граф не сводится к линейной цепочке: нужен один узел «Условие» на входе, "
+                     "без ветвлений и циклов (раздел «Сценарии», Этап 2)")
+        row.status = "active"
+        row.updated_at = datetime.utcnow()
+        session.commit()
+        log_action(session, actor=user["username"], action="activate_scenario", target=row.name)
+        return {"ok": True}
+
+
+@router.post("/scenarios/{scenario_id}/deactivate")
+def deactivate_scenario(scenario_id: int, user: dict = Depends(session_auth.require_session_user)) -> dict:
+    with get_session() as session:
+        row = session.get(Scenario, scenario_id)
+        if row is None:
+            raise HTTPException(404, "Сценарий не найден")
+        row.status = "draft"
+        row.updated_at = datetime.utcnow()
+        session.commit()
+        log_action(session, actor=user["username"], action="deactivate_scenario", target=row.name)
+        return {"ok": True}
+
+
+# --- SLA -------------------------------------------------------------------------
+
 @router.get("/sla-rules")
 def list_sla_rules(user: dict = Depends(session_auth.require_session_user)) -> list[dict]:
     with get_session() as session:
         rows = session.execute(select(SLARule)).scalars().all()
         return [{"id": r.id, "name": r.name, "priority": r.priority, "subsidiary": r.subsidiary,
-                 "response_minutes": r.response_minutes, "resolution_minutes": r.resolution_minutes}
-                for r in rows]
+                 "service_id": r.service_id, "response_minutes": r.response_minutes,
+                 "resolution_minutes": r.resolution_minutes} for r in rows]
 
+
+class SlaRuleCreateRequest(BaseModel):
+    name: str
+    priority: str
+    subsidiary: str | None = None
+    service_id: str | None = None
+    response_minutes: int
+    resolution_minutes: int
+
+
+@router.post("/sla-rules")
+def create_sla_rule(payload: SlaRuleCreateRequest,
+                     user: dict = Depends(session_auth.require_session_user)) -> dict:
+    with get_session() as session:
+        row = SLARule(name=payload.name, priority=payload.priority, subsidiary=payload.subsidiary,
+                       service_id=payload.service_id, response_minutes=payload.response_minutes,
+                       resolution_minutes=payload.resolution_minutes, created_at=datetime.utcnow())
+        session.add(row)
+        session.commit()
+        log_action(session, actor=user["username"], action="create_sla_rule", target=row.name)
+        return {"ok": True, "id": row.id}
+
+
+# --- Интеграции (статус-факты, управлять пока нечем) ---------------------------
 
 @router.get("/integrations/status")
 def integrations_status(user: dict = Depends(session_auth.require_session_user)) -> list[dict]:

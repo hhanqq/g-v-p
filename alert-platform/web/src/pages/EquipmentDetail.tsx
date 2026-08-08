@@ -22,7 +22,7 @@ export default function EquipmentDetail() {
 
   const { data, isLoading } = useQuery<EquipmentDetailType>({
     queryKey: ["equipment", id],
-    queryFn: () => api.get<EquipmentDetailType>(`/equipment/${id}`),
+    queryFn: () => api.get<EquipmentDetailType>(`/equipment/${encodeURIComponent(id ?? "")}`),
   });
 
   const problems = useMemo(() => {

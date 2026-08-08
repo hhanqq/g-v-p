@@ -17,5 +17,7 @@ COPY packages/ packages/
 COPY services/ services/
 COPY datagen/ datagen/
 COPY scripts/ scripts/
+COPY database/ database/
+COPY contracts/ contracts/
 
 ENV PYTHONPATH=/app

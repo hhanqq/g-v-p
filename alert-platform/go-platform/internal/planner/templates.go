@@ -1,0 +1,136 @@
+package planner
+
+import (
+	"fmt"
+	"strings"
+	"time"
+)
+
+var priorityEmoji = map[string]string{
+	"P0": "🔴",
+	"P1": "🟠",
+	"P2": "🟡",
+	"P3": "⚪",
+}
+
+func DisplayID(problemID int64, incidentID *int64) string {
+	if incidentID != nil {
+		return fmt.Sprintf("INC-%04d", *incidentID)
+	}
+	return fmt.Sprintf("PRB-%04d", problemID)
+}
+
+func RenderNew(data ProblemData) string {
+	priority := valueOr(data.Priority, "?")
+	emoji, ok := priorityEmoji[priority]
+	if !ok {
+		emoji = "⚪"
+	}
+	serviceLine := "Сервис: не определён"
+	if data.ServiceName != nil {
+		serviceLine = "Сервис: " + *data.ServiceName
+	}
+	text := fmt.Sprintf(
+		"%s <b>%s · %s</b> · %s · %s\n─────── оригинал %s ───────\n%s\n───────────────────────────────\n%s · Симптом: %s",
+		emoji, priority, DisplayID(data.ID, data.IncidentID), data.ObjectName,
+		valueOr(data.Site, "?"), data.SourceSystem, data.OriginalBody,
+		serviceLine, data.SymptomClass,
+	)
+	if data.AIRootCauseHypothesis != nil && *data.AIRootCauseHypothesis != "" {
+		text += "\n\n<i>Вероятная первопричина (гипотеза, требует проверки, сформирована ИИ):</i>\n" +
+			*data.AIRootCauseHypothesis
+	}
+	return text
+}
+
+func RenderClosure(data ProblemData) string {
+	note := ""
+	if data.ClosedByReconciliation {
+		note = " (закрыто автоматически по таймауту, без сообщения о восстановлении)"
+	}
+	return fmt.Sprintf(
+		"🟢 <b>ЗАКРЫТО · %s</b>\nВосстановлено %s · Длительность %s%s",
+		DisplayID(data.ID, data.IncidentID),
+		data.ResolvedAt.Format("2006-01-02 15:04:05"),
+		FormatDuration(data.ResolvedAt.Sub(data.OpenedAt)), note,
+	)
+}
+
+func RenderDuplicate(duplicateProblemID, originalProblemID int64, incidentID *int64, source string) string {
+	return fmt.Sprintf(
+		"🔗 <b>ДУБЛЬ</b> · PRB-%04d\nПохоже на то же событие, что и %s — подтверждение от %s (определено ИИ, раздел 4.1). Отдельное уведомление не отправлено.",
+		duplicateProblemID, DisplayID(originalProblemID, incidentID), source,
+	)
+}
+
+func RenderScenario(problem ProblemData, scenarioName string, escalation bool) string {
+	action := "Уведомление"
+	if escalation {
+		action = "Эскалация"
+	}
+	return fmt.Sprintf("🧩 <b>%s · %s</b>\nСценарий: %s\nОбъект: %s · Приоритет: %s", action, DisplayID(problem.ID, problem.IncidentID), scenarioName, problem.ObjectName, valueOr(problem.Priority, "?"))
+}
+
+func RenderSLABreach(problem ProblemData, ruleName string, ageMinutes, thresholdMinutes int) string {
+	return fmt.Sprintf("⏱ <b>НАРУШЕНИЕ SLA · %s</b>\nОбъект: %s · Приоритет: %s\nНет реакции %d мин (порог %d мин) · правило %s", DisplayID(problem.ID, problem.IncidentID), problem.ObjectName, valueOr(problem.Priority, "?"), ageMinutes, thresholdMinutes, ruleName)
+}
+
+type SupplementData struct {
+	ProblemID        int64
+	IncidentID       int64
+	RootObject       string
+	RootSymptom      string
+	OpenedAt         time.Time
+	SymptomsCount    int
+	ServicesCount    int
+	RuleNames        []string
+	AISummary        *string
+	AIRecommendation *string
+	Checklist        []string
+}
+
+func RenderSupplement(data SupplementData) string {
+	rules := "не определено"
+	if len(data.RuleNames) > 0 {
+		rules = strings.Join(data.RuleNames, ", ")
+	}
+	lines := []string{
+		fmt.Sprintf("🔵 <b>ДОПОЛНЕНИЕ к %s</b>", DisplayID(data.ProblemID, &data.IncidentID)),
+		fmt.Sprintf("Первопричина: %s (%s), с %s", data.RootObject, data.RootSymptom, data.OpenedAt.Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("Связано алертов: %d · Затронуто сервисов: %d", data.SymptomsCount, data.ServicesCount),
+		fmt.Sprintf("Основание: правило %s", rules),
+	}
+	if data.AISummary != nil && *data.AISummary != "" {
+		lines = append(lines, "", "<i>Сводка (гипотеза, сформирована ИИ):</i>", *data.AISummary)
+	}
+	if data.AIRecommendation != nil && *data.AIRecommendation != "" {
+		lines = append(lines, "", "<i>Рекомендация (на основе базы знаний, сформулирована ИИ):</i>", *data.AIRecommendation)
+	} else if len(data.Checklist) > 0 {
+		lines = append(lines, "", "<i>Рекомендация (чек-лист из базы знаний):</i>")
+		for _, step := range data.Checklist {
+			lines = append(lines, "• "+step)
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func FormatDuration(duration time.Duration) string {
+	seconds := int64(duration.Seconds())
+	hours := seconds / 3600
+	minutes := (seconds % 3600) / 60
+	remainder := seconds % 60
+	if hours > 0 {
+		return fmt.Sprintf("%d ч %d мин", hours, minutes)
+	}
+	if minutes > 0 {
+		return fmt.Sprintf("%d мин %d с", minutes, remainder)
+	}
+	return fmt.Sprintf("%d с", remainder)
+}
+
+func valueOr(value *string, fallback string) string {
+	if value == nil || *value == "" {
+		return fallback
+	}
+	return *value
+}

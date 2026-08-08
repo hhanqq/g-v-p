@@ -14,16 +14,13 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import func, select
 
-from packages.common.db import engine, get_session
+from packages.common.db import get_session
 from packages.common.ingest import ingest_raw as _ingest_raw
-from packages.models.db import Base, SignalQueueEntry
+from packages.models.db import SignalQueueEntry
 
 from .schemas import HealthResponse, IngestAck, RawIngestRequest
 
 app = FastAPI(title="Диспетчер — шлюз приёма")
-
-Base.metadata.create_all(bind=engine)  # M0: без Alembic — таблицы по моделям при старте
-
 
 @app.post("/api/v1/ingest/raw", response_model=IngestAck, status_code=202)
 def ingest_raw(payload: RawIngestRequest) -> IngestAck:

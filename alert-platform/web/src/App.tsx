@@ -15,6 +15,9 @@ import ScenarioEditor from "./pages/ScenarioEditor";
 import Sla from "./pages/Sla";
 import Analytics from "./pages/Analytics";
 import Integrations from "./pages/Integrations";
+import Sources from "./pages/Sources";
+import Audit from "./pages/Audit";
+import Demo from "./pages/Demo";
 
 export default function App() {
   const { data: user, isLoading, isError } = useCurrentUser();
@@ -45,6 +48,9 @@ export default function App() {
           <Route path="/sla" element={<Sla />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/integrations" element={<Integrations />} />
+          <Route path="/sources" element={<Sources />} />
+          <Route path="/audit" element={<Audit />} />
+          <Route path="/demo" element={<Demo />} />
         </Routes>
       </main>
     </div>

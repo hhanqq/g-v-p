@@ -41,11 +41,11 @@ from datagen.scenarios import SCENARIOS
 from packages.common import ldap_auth
 from packages.common import system_stats
 from packages.common.audit import log_action
-from packages.common.db import engine, get_session
+from packages.common.db import get_session
 from packages.common.ingest import ingest_raw
 from packages.common.routing import resolve_recipients
 from packages.common.sources import seed_from_yaml_if_empty
-from packages.models.db import (AuditLog, Base, CmdbObject, CmdbOwnership, CmdbService,
+from packages.models.db import (AuditLog, CmdbObject, CmdbOwnership, CmdbService,
                                  IncidentProblem, Problem, SourceInstance, Subscriber, Subscription)
 from packages.ai import client as ai_client
 from packages.ai.suggest_subscription import extract_recommended_subsidiary, suggest_subscription
@@ -58,7 +58,6 @@ CONNECTORS_DIR = DATAGEN_DIR.parent / "connectors"
 WEB_DIST_DIR = Path(__file__).resolve().parents[2] / "web" / "dist"
 
 app = FastAPI(title="Диспетчер — консоль запуска сценариев")
-Base.metadata.create_all(bind=engine)
 
 # --- Платформа, Этап 1: новый SPA (план — ~/.claude/plans/cheerful-mixing-pillow.md) ---
 # Сессионная cookie-авторизация — отдельно от HTTP Basic ниже (тот
@@ -215,7 +214,7 @@ def list_scenarios() -> dict:
 # Заменяет захардкоженного TRUECONF_TEST_RECIPIENT: любой сотрудник по своему
 # TrueConf-логину заводит здесь подписку на филиал/сервис/приоритет, и
 # delivery_trueconf начинает адресовать ему уведомления без изменения кода
-# (packages/common/routing.resolve_recipients читает эти же таблицы).
+# (Go delivery-planner читает эти же таблицы).
 # Пути везде относительные (см. комментарий в console() ниже) — страница
 # может быть смонтирована и напрямую на :8090, и за прокси под /console/.
 #

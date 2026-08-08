@@ -27,7 +27,7 @@ import yaml  # noqa: E402
 from datagen.generate import HERE as DATAGEN_DIR  # noqa: E402
 from datagen.generate import load_yaml  # noqa: E402
 from datagen.inventory_builder import build_inventory  # noqa: E402
-from packages.models.db import (Base, CmdbAlias, CmdbObject, CmdbOwnership,  # noqa: E402
+from packages.models.db import (CmdbAlias, CmdbObject, CmdbOwnership,  # noqa: E402
                                  CmdbService, CmdbServiceObject, CorrelationRule)
 
 RULES_DIR = Path(__file__).resolve().parents[1] / "packages" / "rules" / "correlations"
@@ -35,8 +35,6 @@ RULES_DIR = Path(__file__).resolve().parents[1] / "packages" / "rules" / "correl
 
 def seed(database_url: str, seed_value: int) -> None:
     engine = create_engine(database_url)
-    Base.metadata.create_all(bind=engine)
-
     cfg = load_yaml(DATAGEN_DIR / "inventory.yaml")
     inv = build_inventory(cfg, seed_value)
 

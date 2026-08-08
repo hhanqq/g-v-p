@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import (Boolean, Date, DateTime, ForeignKey, Integer, String, Text,
-                         UniqueConstraint)
+from sqlalchemy import (Boolean, CheckConstraint, Date, DateTime, ForeignKey, Integer,
+                         String, Text, UniqueConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -200,6 +200,9 @@ class Notification(Base):
     problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id"), index=True)
     type: Mapped[str] = mapped_column(String(16))
     # NEW | SUPPLEMENT | REPEAT | ESCALATION | CLOSURE | SCENARIO | SLA_BREACH
+    recipient: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    # Стабильная доменная идентичность адресата. В отличие от chat_id не
+    # заменяется после ответа провайдера и держит идемпотентность planner.
     chat_id: Mapped[str] = mapped_column(String(128))
     message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(16), default="queued")  # queued | sent | failed
@@ -217,6 +220,50 @@ class Notification(Base):
     # одна Problem теперь может уходить нескольким подписчикам в разные
     # личные чаты, идемпотентность держится per-получатель через chat_id.
     __table_args__ = (UniqueConstraint("problem_id", "type", "chat_id", name="uq_notification_problem_type_chat"),)
+
+
+class DeliveryOutbox(Base):
+    """Версионированная команда каналу доставки.
+
+    Бизнес-логика создаёт Notification и DeliveryOutbox в одной транзакции.
+    Адаптер канала владеет только доставкой и обновлением provider-полей;
+    он не читает Problem/Incident/CMDB и не принимает решений об адресатах.
+    """
+    __tablename__ = "delivery_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    notification_id: Mapped[int] = mapped_column(
+        ForeignKey("notifications.id"), unique=True, index=True
+    )
+    contract_version: Mapped[int] = mapped_column(Integer, default=1)
+    channel: Mapped[str] = mapped_column(String(32), default="trueconf", index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256), unique=True)
+    recipient: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    provider_chat_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    reply_to_notification_id: Mapped[int | None] = mapped_column(
+        ForeignKey("notifications.id"), nullable=True
+    )
+    text: Mapped[str] = mapped_column(Text)
+    parse_mode: Mapped[str] = mapped_column(String(16), default="HTML")
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    # pending | processing | sent | failed
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    available_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    notification: Mapped["Notification"] = relationship(
+        foreign_keys=[notification_id]
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "recipient IS NOT NULL OR provider_chat_id IS NOT NULL",
+            name="ck_delivery_outbox_target",
+        ),
+    )
 
 
 # --- Справочники CMDB (раздел 4, 11.2) --------------------------------------

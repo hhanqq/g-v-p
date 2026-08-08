@@ -32,6 +32,7 @@ export const api = {
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
+  delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
 export interface CurrentUser {
@@ -194,4 +195,32 @@ export interface IntegrationStatus {
   name: string;
   status: "active" | "planned" | "open_question";
   detail: string;
+}
+
+export interface SourceItem {
+  id: number;
+  instance: string;
+  system: string;
+  site: string;
+  created_at: string;
+}
+
+export interface SourceCatalog {
+  items: SourceItem[];
+  systems: string[];
+  sites: string[];
+}
+
+export interface AuditItem {
+  id: number;
+  actor: string;
+  action: string;
+  target: string | null;
+  detail: string | null;
+  created_at: string;
+}
+
+export interface DemoScenario {
+  name: string;
+  description: string;
 }

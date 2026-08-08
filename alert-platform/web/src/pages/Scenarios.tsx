@@ -40,6 +40,7 @@ export default function Scenarios() {
           <p className="text-sm text-muted">Сохранённых сценариев пока нет — создайте первый.</p>
         )}
       </div>
+      <Link to="/demo" className="mt-4 inline-block rounded-md bg-accent px-4 py-2 text-sm text-white">Запустить демо-сценарий →</Link>
     </div>
   );
 }

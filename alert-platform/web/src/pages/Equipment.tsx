@@ -18,7 +18,7 @@ export default function Equipment() {
 
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         {data?.map((eq) => (
-          <Link key={eq.id} to={`/equipment/${eq.id}`}>
+          <Link key={eq.id} to={`/equipment/${encodeURIComponent(eq.id)}`}>
             <Card className="h-full hover:border-accent">
               <div className="text-sm font-medium">{eq.name}</div>
               <div className="mt-1 text-xs text-muted">

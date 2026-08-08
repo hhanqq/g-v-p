@@ -19,13 +19,15 @@ graph LR
     SW -->|"HTTP POST /api/v1/ingest/raw"| GW
     NEWSRC -.->|"тот же универсальный API"| GW
 
-    GW["Шлюз (Gateway)\nFastAPI"] --> PG[("PostgreSQL\nSignal (WORM) + очередь\n+ CMDB + подписки")]
+    GW["Шлюз (Gateway)\nGo / net/http"] --> PG[("PostgreSQL\nSignal (WORM) + очереди\n+ CMDB + подписки")]
     PG --> WRK["Pipeline Worker\nпарсинг → резолвинг → свёртка →\nкорреляция → приоритет"]
     WRK --> PG
     WRK -.->|"классификация, дедупликация"| OLLAMA[("Ollama\nлокальная LLM, self-hosted")]
 
-    PG --> DEL["Delivery TrueConf\nадресация по подпискам"]
-    DEL -.->|"саммари, рекомендации,\nподсказка подписки"| OLLAMA
+    PG --> PLAN["Delivery planner (Go)\nадресация + готовый текст"]
+    PLAN --> OUT[("Transactional outbox\nDeliveryCommand v1")]
+    PLAN -.->|"саммари, рекомендации,\nподсказка подписки"| OLLAMA
+    OUT --> DEL["Тонкий Python-адаптер\nTrueConf"]
     DEL -->|"Chatbot Connector API"| TC["TrueConf Server"]
     TC --> USR["Сотрудники"]
 
@@ -41,12 +43,14 @@ graph LR
 
 | Компонент | Технология | Роль |
 |---|---|---|
-| Шлюз (Gateway) | FastAPI | Приём сырых событий, запись в WORM, идемпотентность по хэшу |
-| Pipeline Worker | Python, `FOR UPDATE SKIP LOCKED` | Парсинг → резолвинг → свёртка → корреляция → приоритет; горизонтально масштабируется (несколько реплик безопасно конкурируют за очередь) |
-| PostgreSQL | PostgreSQL 16 | Очередь-как-БД, WORM-журнал сигналов, CMDB, подписки, история |
-| Delivery TrueConf | Python, `python-trueconf-bot` | Адресация по подпискам, доставка NEW/CLOSURE/SUPPLEMENT/DUPLICATE_NOTE |
+| Шлюз (Gateway) | Go 1.25, `net/http`, pgx | Приём сырых событий; атомарная запись в WORM и очередь; идемпотентность по хэшу |
+| Pipeline Worker | Go 1.25, pgx, `FOR UPDATE SKIP LOCKED` | Парсинг → резолвинг → свёртка → корреляция → приоритет; горизонтально масштабируется (несколько реплик безопасно конкурируют за очередь) |
+| PostgreSQL | PostgreSQL 16 | Очередь-как-БД, transactional outbox, WORM-журнал сигналов, CMDB, подписки, история |
+| Delivery planner | Go 1.25, pgx | Маршрутизация, шаблоны, локальный Ollama и подготовка команд `DeliveryCommand v1` |
+| Delivery TrueConf | Python, `python-trueconf-bot` | Vendor SDK: входящие команды/reply-ACK, создание чата, отправка, retry/backoff и сохранение provider `chat_id/message_id` |
 | Ollama | Открытые веса (self-hosted) | Пять ИИ-сценариев (раздел 4 ниже) — работает локально, без внешних API |
-| Admin Console | FastAPI | Дашборд, регистрация источников, личный кабинет self-service |
+| Admin Console | Go API + React SPA | Go раздаёт SPA, выполняет LDAP session auth, обслуживает admin API и token-based личный кабинет; старые HTML URL перенаправляются на SPA |
+| Demo Runner | Python/FastAPI, internal-only | Только синтетический datagen и живые Ollama self-tests; не обслуживает HTML/авторизацию и не участвует в production-тракте |
 | TrueConf Server | TrueConf | Обязательный корпоративный канал доставки (кейс, п.2 условий) |
 
 ## 2. Поток данных (9 стадий конвейера)
@@ -63,9 +67,8 @@ flowchart LR
 ```
 
 Каждая стадия — отдельный, независимо тестируемый модуль
-(`services/pipeline/{parser,resolver,state_manager,correlator}`,
-`packages/rules/priority.py`, `packages/common/routing.py`,
-`services/delivery_trueconf/`). Отказ одной стадии на одном сообщении не
+(`go-platform/internal/pipeline`, `go-platform/internal/planner`,
+`services/delivery_trueconf/outbox.py`). Отказ одной стадии на одном сообщении не
 останавливает конвейер — раздел И5: событие остаётся в WORM, ошибка
 видна в `SignalQueueEntry.error`, обработка остальных сообщений продолжается.
 
@@ -79,7 +82,7 @@ flowchart LR
 | Канал доставки | **TrueConf** | Отечественный продукт, обязателен по условиям кейса |
 | СУБД | **PostgreSQL** | Открытый исходный код, не привязан к одному вендору; в РФ поставляется в т.ч. как Postgres Pro — совместимая миграция при необходимости |
 | ИИ-модуль | **Ollama + открытые веса** (модель `log-reader` на базе `qwen3-coder`) | Полностью self-hosted, без обращения к внешним облачным API — соответствует политике ИБ кейса («запрет передачи данных во внешние облака», раздел «Дополнительные вводные данные») |
-| Backend | **Python (FastAPI, SQLAlchemy)** | Открытый исходный код, кросс-платформенный, не иностранный SaaS |
+| Backend | **Go для ingress, pipeline, planner и admin console; Python для vendor/demo adapters** | Go владеет критическим трактом, LDAP session, личным кабинетом и admin API. Python изолирует TrueConf SDK, LDAP deprovision sweep и необязательный синтетический datagen |
 | Контейнеризация | **Docker Compose** | Инструмент сборки/запуска, не часть решаемой бизнес-задачи — при необходимости заменяется на Podman/аналог без изменения кода приложения |
 
 Иностранных облачных сервисов (SaaS LLM, зарубежные мессенджеры, внешние
@@ -95,9 +98,9 @@ open-source и развёрнуты локально.
 symptom_class), без изменения кода шлюза или воркера (кейс, п.2 условий:
 *«подключение новых источников… без изменения ядра системы»*).
 
-Живая OpenAPI-документация (Swagger UI, автогенерация FastAPI, не
-статический макет):
-- Шлюз: `https://xn--80aebrvrg.xn--p1acf/ingest/docs`
+Живая документация и OpenAPI-контракт:
+- Go-шлюз: `/docs` и `/openapi.json` (без внешнего CDN);
+- развёрнутый стенд до переключения версии: `https://xn--80aebrvrg.xn--p1acf/ingest/docs`;
 - Консоль/API подписок/дашборда: `https://xn--80aebrvrg.xn--p1acf/console/docs`
 
 Подключение нового **инстанса** уже поддерживаемой системы (пятый филиал
@@ -105,23 +108,23 @@ Zabbix и т.п.) — через `/sources/` (раздел 5), без редеп
 принципиально новой системы мониторинга — новый `connectors/*.yaml`
 (конфигурация, не код).
 
-## 5. Пять ИИ-сценариев (`packages/ai/`)
+## 5. Пять ИИ-сценариев
 
-Единый модуль, общий клиент Ollama (`packages/ai/client.py`), одинаковая
+Go pipeline/planner и изолированный Python demo-runner используют один локальный Ollama endpoint; одинаковая
 политика отказа везде — раздел И5: сбой/таймаут ИИ никогда не блокирует
 конвейер, деградация до поведения без ИИ-компонента.
 
 | Сценарий | Модуль | Бизнес-ценность |
 |---|---|---|
 | Саммаризация инцидента | `llm_summary` (delivery) | Дежурный получает связный пересказ каскада вместо N разрозненных сообщений |
-| Семантическая нормализация | `classify.py` | Алерты с нестандартной формулировкой (не только точный regex) участвуют в корреляции, а не теряются как «unknown» |
-| Рекомендации из базы знаний | `recommend.py` + `packages/rules/runbooks.yaml` | Дежурный сразу видит релевантный шаг диагностики, а не общий чек-лист |
-| Дедупликация между источниками | `dedup.py` | Устраняет двойные уведомления об одном событии от разных систем мониторинга (кейс, проблема №1) |
+| Семантическая нормализация | Go pipeline (`internal/pipeline/ai.go`) | Алерты с нестандартной формулировкой (не только точный regex) участвуют в корреляции, а не теряются как «unknown» |
+| Рекомендации из базы знаний | Go delivery planner + `packages/rules/runbooks.yaml` | Дежурный сразу видит релевантный шаг диагностики, а не общий чек-лист |
+| Дедупликация между источниками | Go pipeline (`internal/pipeline/ai.go`) | Устраняет двойные уведомления об одном событии от разных систем мониторинга (кейс, проблема №1) |
 | Подсказка подписки на основе истории | `suggest_subscription.py` | Новый подписчик сразу видит, на какой филиал исторически стоит подписаться первым — умная маршрутизация, а не ручной перебор |
 
 ## 6. Масштабируемость и подключение новых каналов
 
 - **Источники**: конфигурация (`connectors/*.yaml`) + БД-реестр инстансов (`/sources/`) — без изменения ядра.
-- **Каналы доставки**: TrueConf обязателен; `services/delivery_trueconf/` изолирован от остального конвейера через таблицу `Notification` — второй канал добавляется как параллельный consumer той же очереди уведомлений, без изменения парсера/корреляции/приоритизации.
+- **Каналы доставки**: TrueConf обязателен; Python adapter изолирован контрактом `DeliveryCommand v1` и `delivery_outbox` — второй канал добавляется отдельным producer/consumer этого интерфейса без изменения парсера/корреляции/приоритизации.
 - **Обработка**: `pipeline-worker` — множественные реплики безопасно конкурируют за очередь (`FOR UPDATE SKIP LOCKED`), проверено логикой двухфазного claim/process.
 - **Нагрузка**: измеренные вживую показатели — раздел «Инфраструктура и масштабируемость» (`INFRASTRUCTURE.md`).

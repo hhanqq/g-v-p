@@ -32,11 +32,11 @@ from sqlalchemy import select, update
 from packages.ai.classify import classify_symptom_sync
 from packages.ai.dedup import is_duplicate_sync
 from packages.ai.root_cause_hypothesis import suggest_root_cause_sync
-from packages.common.db import engine, get_session
+from packages.common.db import get_session
 from packages.common.deprovision import deactivate_departed_subscribers
 from packages.common.sources import load_passports, seed_from_yaml_if_empty
 from packages.models.canonical import compute_dedup_key
-from packages.models.db import (Base, CmdbService, CmdbServiceObject, Event, Problem, Signal,
+from packages.models.db import (CmdbService, CmdbServiceObject, Event, Problem, Signal,
                                  SignalQueueEntry)
 from packages.rules.priority import business_impact_from_criticality, compute_priority
 from services.pipeline.correlator import try_correlate
@@ -301,7 +301,6 @@ def main():
     signal.signal(signal.SIGTERM, _handle_stop)
     signal.signal(signal.SIGINT, _handle_stop)
 
-    Base.metadata.create_all(bind=engine)
     connectors = load_connectors(CONNECTORS_DIR)
     with get_session() as session:
         seed_from_yaml_if_empty(session, CONNECTORS_DIR / "sources.yaml")

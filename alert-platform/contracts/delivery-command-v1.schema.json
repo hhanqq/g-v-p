@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dispatcher.local/contracts/delivery-command-v1.schema.json",
+  "title": "DeliveryCommandV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "notification_id",
+    "channel",
+    "idempotency_key",
+    "text",
+    "parse_mode"
+  ],
+  "properties": {
+    "contract_version": { "const": 1 },
+    "notification_id": { "type": "integer", "minimum": 1 },
+    "channel": { "const": "trueconf" },
+    "idempotency_key": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "recipient": { "type": ["string", "null"], "minLength": 1, "maxLength": 256 },
+    "provider_chat_id": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 },
+    "reply_to_notification_id": { "type": ["integer", "null"], "minimum": 1 },
+    "text": { "type": "string", "minLength": 1 },
+    "parse_mode": { "enum": ["HTML", "MARKDOWN", "PLAIN"] }
+  },
+  "anyOf": [
+    {
+      "required": ["recipient"],
+      "properties": { "recipient": { "type": "string", "minLength": 1, "maxLength": 256 } }
+    },
+    {
+      "required": ["provider_chat_id"],
+      "properties": { "provider_chat_id": { "type": "string", "minLength": 1, "maxLength": 128 } }
+    }
+  ]
+}

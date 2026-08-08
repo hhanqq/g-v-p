@@ -20,9 +20,10 @@ os.environ.setdefault("CMDB_SEED", "42")
 from fastapi.testclient import TestClient  # noqa: E402
 
 import services.api.main as main_module  # noqa: E402
-from packages.common.db import get_session  # noqa: E402
-from packages.models.db import CmdbObject, Problem, Subscriber, Subscription  # noqa: E402
+from packages.common.db import engine, get_session  # noqa: E402
+from packages.models.db import Base, CmdbObject, Problem, Subscriber, Subscription  # noqa: E402
 
+Base.metadata.create_all(engine)
 client = TestClient(main_module.app)
 
 

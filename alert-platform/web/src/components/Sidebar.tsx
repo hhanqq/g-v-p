@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { NavLink, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, CurrentUser } from "../api";
 
 interface NavChild {
@@ -124,6 +124,9 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
       </nav>
 
       <div className="border-t border-border px-5 py-4 text-sm">
+        <Link to="/compliance" className="mb-3 block text-xs text-muted hover:text-slate-100">
+          ✅ Соответствие критериям кейса
+        </Link>
         <div className="mb-2">
           <div>{user.username}</div>
           <div className="text-xs text-muted">{user.is_admin ? "администратор" : "сотрудник"}</div>

@@ -89,6 +89,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		writeJSON(response, http.StatusOK, user)
 		return
 	}
+	if request.Method == http.MethodGet && path == "/api/compliance-metrics" {
+		server.complianceMetrics(response, request)
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/home/summary" {
 		server.withAuth(response, request, server.homeSummary)
 		return
@@ -572,11 +576,57 @@ func (server *Server) getEmployee(response http.ResponseWriter, request *http.Re
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
+	recentAlerts, err := server.loadRecentAlerts(request.Context(), username)
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
 	writeJSON(response, http.StatusOK, map[string]any{
 		"id": id, "trueconf_username": username, "full_name": nullableString(fullName),
 		"phone": nullableString(phone), "email": nullableString(email), "position": nullableString(position),
 		"active": active, "subscriptions": subscriptions, "availability_history": availability,
+		"recent_alerts": recentAlerts,
 	})
+}
+
+// loadRecentAlerts возвращает уведомления, реально доставленные этому
+// сотруднику (join по notifications.recipient — стабильному trueconf-
+// username, а не chat_id, который outbox.py перезаписывает реальным
+// provider chat_id после отправки).
+func (server *Server) loadRecentAlerts(ctx context.Context, username string) ([]map[string]any, error) {
+	rows, err := server.pool.Query(ctx, `
+		SELECT notification.id, notification.type, notification.status, notification.created_at, notification.sent_at,
+		       problem.id, problem.object_id, problem.symptom_class, problem.site, problem.priority,
+		       problem.status, problem.opened_at, problem.resolved_at
+		FROM notifications notification
+		JOIN problems problem ON problem.id = notification.problem_id
+		WHERE notification.recipient = $1
+		ORDER BY notification.created_at DESC
+		LIMIT 50`, username)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var notificationID, problemID int64
+		var notificationType, notificationStatus, symptomClass, problemStatus string
+		var objectID, site, priority sql.NullString
+		var createdAt, openedAt time.Time
+		var sentAt, resolvedAt sql.NullTime
+		if err := rows.Scan(&notificationID, &notificationType, &notificationStatus, &createdAt, &sentAt,
+			&problemID, &objectID, &symptomClass, &site, &priority, &problemStatus, &openedAt, &resolvedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{
+			"notification_id": notificationID, "type": notificationType, "status": notificationStatus,
+			"created_at": formatISO(createdAt), "sent_at": nullableISO(sentAt),
+			"problem_id": problemID, "object_id": nullableString(objectID), "symptom_class": symptomClass,
+			"site": nullableString(site), "priority": nullableString(priority), "problem_status": problemStatus,
+			"opened_at": formatISO(openedAt), "resolved_at": nullableISO(resolvedAt),
+		})
+	}
+	return items, rows.Err()
 }
 
 func (server *Server) loadSubscriptions(ctx context.Context, employeeID int64) ([]map[string]any, error) {

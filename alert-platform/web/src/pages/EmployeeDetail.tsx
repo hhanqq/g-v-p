@@ -2,7 +2,16 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, EmployeeDetail as EmployeeDetailType } from "../api";
-import { Card, PageHeader } from "../components/ui";
+import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
+
+const NOTIFICATION_TYPE_LABEL: Record<string, string> = {
+  NEW: "новый алерт",
+  CLOSURE: "закрытие",
+  SUPPLEMENT: "ИИ-сводка",
+  DUPLICATE_NOTE: "отметка о дубле",
+  SCENARIO: "сценарий",
+  SLA_BREACH: "нарушение SLA",
+};
 
 const STATUSES = [
   { value: "available", label: "на месте" },
@@ -75,6 +84,35 @@ export default function EmployeeDetail() {
             ))}
           </ul>
         )}
+      </Card>
+
+      <Card className="mb-4">
+        <h3 className="mb-3 text-sm font-semibold">Полученные алерты</h3>
+        <p className="mb-3 text-xs text-muted">
+          Уведомления, реально отправленные этому сотруднику ботом TrueConf — по факту доставки, а не
+          по текущим подпискам (подписки могли измениться уже после отправки).
+        </p>
+        {data.recent_alerts.length === 0 && <p className="text-sm text-muted">Алертов пока не было.</p>}
+        <div className="space-y-2">
+          {data.recent_alerts.map((a) => (
+            <div key={a.notification_id} className="flex items-center justify-between rounded-lg bg-bg px-3 py-2">
+              <div className="text-sm">
+                <span className="text-muted">{NOTIFICATION_TYPE_LABEL[a.type] ?? a.type}</span>
+                {" · "}
+                {a.symptom_class}
+                {a.object_id && <span className="text-muted"> · {a.object_id}</span>}
+                <div className="text-xs text-muted">
+                  {new Date(a.sent_at ?? a.created_at).toLocaleString("ru-RU")}
+                  {a.status !== "sent" && ` · ${a.status}`}
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <PriorityBadge priority={a.priority} />
+                <StatusBadge status={a.problem_status} />
+              </div>
+            </div>
+          ))}
+        </div>
       </Card>
 
       <Card>

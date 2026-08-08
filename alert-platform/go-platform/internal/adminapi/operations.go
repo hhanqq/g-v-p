@@ -24,7 +24,7 @@ func (server *Server) handleLegacyRedirect(response http.ResponseWriter, request
 		"/audit":      "/console/app/audit",
 		"/audit/":     "/console/app/audit",
 		"/demo":       "/console/app/demo",
-		"/compliance": "/console/app/",
+		"/compliance": "/console/app/compliance",
 	}
 	target, ok := targets[path]
 	if !ok {

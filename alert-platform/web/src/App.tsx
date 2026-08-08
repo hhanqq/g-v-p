@@ -1,7 +1,8 @@
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import { useCurrentUser } from "./auth";
 import Login from "./pages/Login";
+import Compliance from "./pages/Compliance";
 import Home from "./pages/Home";
 import Incidents from "./pages/Incidents";
 import IncidentDetail from "./pages/IncidentDetail";
@@ -20,7 +21,15 @@ import Audit from "./pages/Audit";
 import Demo from "./pages/Demo";
 
 export default function App() {
+  const location = useLocation();
   const { data: user, isLoading, isError } = useCurrentUser();
+
+  // Страница «Соответствие критериям» намеренно публична — рассчитана на
+  // судью/проверяющего без LDAP-логина, как и её предшественница на
+  // Python (/console/compliance). Единственный маршрут вне LDAP-сессии.
+  if (location.pathname === "/compliance") {
+    return <Compliance />;
+  }
 
   if (isLoading) {
     return <div className="flex h-screen items-center justify-center text-muted">Загрузка…</div>;

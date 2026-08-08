@@ -150,9 +150,26 @@ export interface EmployeeListItem {
   availability_status: string | null;
 }
 
+export interface EmployeeRecentAlert {
+  notification_id: number;
+  type: string;
+  status: string;
+  created_at: string;
+  sent_at: string | null;
+  problem_id: number;
+  object_id: string | null;
+  symptom_class: string;
+  site: string | null;
+  priority: string | null;
+  problem_status: string;
+  opened_at: string;
+  resolved_at: string | null;
+}
+
 export interface EmployeeDetail extends EmployeeListItem {
   subscriptions: { id: number; subsidiary: string | null; service_id: string | null; priority_threshold: string | null }[];
   availability_history: { id: number; status: string; valid_from: string; valid_until: string | null; source: string; note: string | null }[];
+  recent_alerts: EmployeeRecentAlert[];
 }
 
 export interface ScenarioListItem {

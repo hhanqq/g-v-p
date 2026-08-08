@@ -169,6 +169,19 @@ export interface SlaRuleItem {
   resolution_minutes: number;
 }
 
+export interface AnalyticsSummary {
+  alerts_over_time: [string, number][];
+  top_problem_objects: {
+    object_id: string; count: number; name: string; site: string | null; equipment_type: string | null;
+  }[];
+  top_symptoms: [string, number][];
+  priority_distribution: Record<string, number>;
+  sla_breach: { total: number; by_priority: Record<string, number> };
+  avg_mttr_seconds: number | null;
+  resolution_coverage_pct: number | null;
+  incidents: { open_problems: number; incidents: number };
+}
+
 export interface IntegrationStatus {
   name: string;
   status: "active" | "planned" | "open_question";

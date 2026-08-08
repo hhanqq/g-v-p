@@ -18,6 +18,7 @@ func main() {
 	ollamaTimeout := durationSeconds("OLLAMA_TIMEOUT_S", 90)
 	ollamaURL := valueOr("OLLAMA_URL", "http://127.0.0.1:11434")
 	ollamaModel := valueOr("OLLAMA_MODEL", "log-reader")
+	ollamaEmbedModel := valueOr("OLLAMA_EMBED_MODEL", "nomic-embed-text")
 	runbooksPath := valueOr("RUNBOOKS_PATH", "/app/runbooks.yaml")
 
 	runbooks, err := planner.LoadRunbooks(runbooksPath)
@@ -29,7 +30,7 @@ func main() {
 	service, err := planner.New(
 		ctx,
 		databaseURL,
-		planner.NewOllamaClient(ollamaURL, ollamaModel, ollamaTimeout),
+		planner.NewOllamaClient(ollamaURL, ollamaModel, ollamaEmbedModel, ollamaTimeout),
 		runbooks,
 	)
 	if err != nil {

@@ -11,17 +11,54 @@ import (
 )
 
 type OllamaClient struct {
-	baseURL string
-	model   string
-	client  *http.Client
+	baseURL    string
+	model      string
+	embedModel string
+	client     *http.Client
 }
 
-func NewOllamaClient(baseURL, model string, timeout time.Duration) *OllamaClient {
+func NewOllamaClient(baseURL, model, embedModel string, timeout time.Duration) *OllamaClient {
 	return &OllamaClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		model:   model,
-		client:  &http.Client{Timeout: timeout},
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		model:      model,
+		embedModel: embedModel,
+		client:     &http.Client{Timeout: timeout},
 	}
+}
+
+// Embed вызывает локальную embedding-модель (nomic-embed-text) для RAG
+// по базе знаний (internal/planner/knowledge_base.go). Деградирует к
+// nil при любой ошибке — тот же контракт, что у Ask (раздел И5):
+// отсутствие контекста из базы знаний не должно блокировать разбор.
+func (client *OllamaClient) Embed(ctx context.Context, text string) []float32 {
+	payload := map[string]any{"model": client.embedModel, "prompt": text}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, client.baseURL+"/api/embeddings", bytes.NewReader(body))
+	if err != nil {
+		return nil
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.client.Do(request)
+	if err != nil {
+		return nil
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil
+	}
+	var decoded struct {
+		Embedding []float32 `json:"embedding"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
+		return nil
+	}
+	if len(decoded.Embedding) == 0 {
+		return nil
+	}
+	return decoded.Embedding
 }
 
 func (client *OllamaClient) Ask(ctx context.Context, prompt string, numPredict int) *string {
@@ -81,7 +118,7 @@ func BuildSummaryPrompt(rootSymptom, rootObject, rootSite string, openedAt time.
 	)
 }
 
-func BuildOnDemandAnalysisPrompt(objectName, site, symptomClass string, openedAt time.Time, symptoms []Symptom) string {
+func BuildOnDemandAnalysisPrompt(objectName, site, symptomClass string, openedAt time.Time, symptoms []Symptom, kbChunks []KBChunk) string {
 	lines := make([]string, 0, len(symptoms))
 	for _, symptom := range symptoms {
 		lines = append(lines, fmt.Sprintf("- %s (%s)", symptom.ObjectName, symptom.Class))
@@ -90,9 +127,17 @@ func BuildOnDemandAnalysisPrompt(objectName, site, symptomClass string, openedAt
 	if len(lines) > 0 {
 		related = strings.Join(lines, "\n")
 	}
+	kbSection := ""
+	if len(kbChunks) > 0 {
+		kbLines := make([]string, 0, len(kbChunks))
+		for _, chunk := range kbChunks {
+			kbLines = append(kbLines, fmt.Sprintf("### %s\n%s", chunk.Title, chunk.Content))
+		}
+		kbSection = "\n\nВыдержки из базы знаний компании по управлению инцидентами (используй их как основной источник для рекомендаций, не противоречь им):\n" + strings.Join(kbLines, "\n\n")
+	}
 	return fmt.Sprintf(
-		"Инцидент мониторинга промышленного предприятия. Дежурный инженер попросил разбор конкретного алерта.\nАлерт: %s на площадке %s, симптом %s, зафиксирован %s.\nСвязанные алерты в том же инциденте:\n%s\n\nДай развёрнутый разбор для дежурного инженера на русском (4-6 предложений): что вероятно произошло, как это связано с остальными алертами (если они есть), с чего начать диагностику. Используй только факты из данных выше, без домыслов. Не используй списки и заголовки — сплошной текст.",
-		objectName, site, symptomClass, openedAt.Format("2006-01-02 15:04:05"), related,
+		"Инцидент мониторинга промышленного предприятия. Дежурный инженер попросил разбор конкретного алерта.\nАлерт: %s на площадке %s, симптом %s, зафиксирован %s.\nСвязанные алерты в том же инциденте:\n%s%s\n\nДай развёрнутый разбор для дежурного инженера на русском (4-6 предложений): что вероятно произошло, как это связано с остальными алертами (если они есть), с чего начать диагностику согласно базе знаний компании (если выдержки выше даны). Используй только факты из данных выше и базы знаний, без домыслов. Не используй списки и заголовки — сплошной текст.",
+		objectName, site, symptomClass, openedAt.Format("2006-01-02 15:04:05"), related, kbSection,
 	)
 }
 

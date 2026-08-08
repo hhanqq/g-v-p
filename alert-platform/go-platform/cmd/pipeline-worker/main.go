@@ -26,7 +26,8 @@ func main() {
 	defer stop()
 	ai := planner.NewOllamaClient(
 		valueOr("OLLAMA_URL", "http://127.0.0.1:11434"),
-		valueOr("OLLAMA_MODEL", "log-reader"), aiTimeout,
+		valueOr("OLLAMA_MODEL", "log-reader"),
+		valueOr("OLLAMA_EMBED_MODEL", "nomic-embed-text"), aiTimeout,
 	)
 	service, err := pipeline.New(ctx, databaseURL, connectorsDir, priorityPath, ai)
 	if err != nil {

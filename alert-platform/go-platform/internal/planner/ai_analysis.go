@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 )
 
@@ -81,8 +82,11 @@ func (planner *Planner) processAIAnalysisRequest(ctx context.Context, candidate 
 		}
 	}
 
-	prompt := BuildOnDemandAnalysisPrompt(problem.ObjectName, valueOr(problem.Site, "?"), problem.SymptomClass, problem.OpenedAt, symptoms)
-	analysis := planner.ollama.Ask(ctx, prompt, 400)
+	queryText := strings.TrimSpace(problem.SymptomClass + " " + problem.OriginalBody)
+	kbChunks := planner.searchKnowledgeBase(ctx, queryText, 4)
+
+	prompt := BuildOnDemandAnalysisPrompt(problem.ObjectName, valueOr(problem.Site, "?"), problem.SymptomClass, problem.OpenedAt, symptoms, kbChunks)
+	analysis := planner.ollama.Ask(ctx, prompt, 500)
 
 	text := RenderAIAnalysis(AIAnalysisData{
 		ProblemID: problem.ID, IncidentID: problem.IncidentID, ObjectName: problem.ObjectName,

@@ -159,14 +159,27 @@ func TestPromptsPreservePythonContract(t *testing.T) {
 func TestOnDemandAnalysisPromptListsRelatedOrSaysStandalone(t *testing.T) {
 	withRelated := BuildOnDemandAnalysisPrompt(
 		"sw-01", "brd", "node_down", time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC),
-		[]Symptom{{ObjectName: "host-1", Class: "host_unreachable"}},
+		[]Symptom{{ObjectName: "host-1", Class: "host_unreachable"}}, nil,
 	)
 	if !strings.Contains(withRelated, "host-1 (host_unreachable)") {
 		t.Fatalf("on-demand prompt dropped related symptom: %s", withRelated)
 	}
-	standalone := BuildOnDemandAnalysisPrompt("sw-01", "brd", "node_down", time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC), nil)
+	standalone := BuildOnDemandAnalysisPrompt("sw-01", "brd", "node_down", time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC), nil, nil)
 	if !strings.Contains(standalone, "инцидент не сформирован") {
 		t.Fatalf("on-demand prompt should admit no incident when standalone: %s", standalone)
+	}
+	if strings.Contains(standalone, "Выдержки из базы знаний") {
+		t.Fatalf("prompt should not mention the knowledge base section when no chunks were retrieved: %s", standalone)
+	}
+}
+
+func TestOnDemandAnalysisPromptIncludesKnowledgeBaseContext(t *testing.T) {
+	withKB := BuildOnDemandAnalysisPrompt(
+		"sw-01", "brd", "node_down", time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC), nil,
+		[]KBChunk{{Title: "Плейбук: node_down", Content: "Проверить питание и статус интерфейсов коммутатора."}},
+	)
+	if !strings.Contains(withKB, "Выдержки из базы знаний") || !strings.Contains(withKB, "Проверить питание и статус интерфейсов") {
+		t.Fatalf("prompt dropped knowledge base context: %s", withKB)
 	}
 }
 
@@ -187,5 +200,42 @@ func TestRenderAIAnalysisFactsBeforeHypothesisAndDegradesGracefully(t *testing.T
 	degraded := RenderAIAnalysis(AIAnalysisData{ProblemID: 5, ObjectName: "sw-01", SymptomClass: "node_down"})
 	if !strings.Contains(degraded, "ИИ временно недоступна") || !strings.Contains(degraded, "Инцидент не сформирован") {
 		t.Fatalf("degraded analysis should stay honest about missing AI and incident: %s", degraded)
+	}
+}
+
+func TestChunkMarkdownSplitsByHeadingsAndPrefixesDocTitle(t *testing.T) {
+	doc := "# Плейбук: node_down\n\nВводный абзац.\n\n## Порядок диагностики\n\nШаг один.\n\nШаг два.\n\n## Эскалация\n\nКому эскалировать.\n"
+	chunks := ChunkMarkdown(doc)
+	if len(chunks) != 3 {
+		t.Fatalf("expected 3 chunks (intro + 2 sections), got %d: %+v", len(chunks), chunks)
+	}
+	if chunks[0].Title != "Плейбук: node_down" || !strings.Contains(chunks[0].Content, "Вводный абзац") {
+		t.Fatalf("intro chunk drifted: %+v", chunks[0])
+	}
+	if chunks[1].Title != "Плейбук: node_down — Порядок диагностики" {
+		t.Fatalf("section title should be prefixed with doc title: %q", chunks[1].Title)
+	}
+	if !strings.Contains(chunks[1].Content, "Шаг один") || !strings.Contains(chunks[1].Content, "Шаг два") {
+		t.Fatalf("section content dropped paragraphs: %+v", chunks[1])
+	}
+	if chunks[2].Title != "Плейбук: node_down — Эскалация" {
+		t.Fatalf("second section title drifted: %q", chunks[2].Title)
+	}
+}
+
+func TestChunkMarkdownSplitsOversizedSectionsByParagraph(t *testing.T) {
+	longParagraph := strings.Repeat("Длинный абзац с диагностикой. ", 40) // > maxChunkChars
+	doc := "# Документ\n\n## Раздел\n\n" + longParagraph + "\n\n" + longParagraph + "\n"
+	chunks := ChunkMarkdown(doc)
+	if len(chunks) < 2 {
+		t.Fatalf("oversized section should split into multiple chunks, got %d", len(chunks))
+	}
+	for _, chunk := range chunks {
+		if len(chunk.Content) > maxChunkChars+len(longParagraph) {
+			t.Fatalf("chunk exceeds expected size bound: %d chars", len(chunk.Content))
+		}
+		if chunk.Title != "Документ — Раздел" {
+			t.Fatalf("split chunks should keep the section title: %q", chunk.Title)
+		}
 	}
 }

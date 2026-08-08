@@ -11,6 +11,7 @@ import EquipmentDetail from "./pages/EquipmentDetail";
 import Employees from "./pages/Employees";
 import EmployeeDetail from "./pages/EmployeeDetail";
 import Scenarios from "./pages/Scenarios";
+import ScenarioEditor from "./pages/ScenarioEditor";
 import Sla from "./pages/Sla";
 import Analytics from "./pages/Analytics";
 import Integrations from "./pages/Integrations";
@@ -39,6 +40,8 @@ export default function App() {
           <Route path="/employees" element={<Employees />} />
           <Route path="/employees/:id" element={<EmployeeDetail />} />
           <Route path="/scenarios" element={<Scenarios />} />
+          <Route path="/scenarios/new" element={<ScenarioEditor />} />
+          <Route path="/scenarios/:id/edit" element={<ScenarioEditor />} />
           <Route path="/sla" element={<Sla />} />
           <Route path="/analytics" element={<Analytics />} />
           <Route path="/integrations" element={<Integrations />} />

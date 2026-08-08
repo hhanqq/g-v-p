@@ -30,6 +30,8 @@ export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+  put: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
 };
 
 export interface CurrentUser {
@@ -150,11 +152,17 @@ export interface ScenarioListItem {
   updated_at: string;
 }
 
+export interface ScenarioDetail extends ScenarioListItem {
+  graph_json: string;
+  created_by: string | null;
+}
+
 export interface SlaRuleItem {
   id: number;
   name: string;
   priority: string;
   subsidiary: string | null;
+  service_id: string | null;
   response_minutes: number;
   resolution_minutes: number;
 }

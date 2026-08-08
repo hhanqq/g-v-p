@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { api, ScenarioListItem } from "../api";
-import { Card, PageHeader, StagePlaceholder } from "../components/ui";
+import { Card, PageHeader } from "../components/ui";
 
 export default function Scenarios() {
   const { data } = useQuery<ScenarioListItem[]>({
@@ -10,24 +11,33 @@ export default function Scenarios() {
 
   return (
     <div>
-      <PageHeader title="Сценарии" subtitle="Визуальный no-code конструктор обработки и эскалации алертов" />
-      <StagePlaceholder
-        title="Редактор графа сценариев — этап 2"
-        description="Drag-and-drop конструктор на ReactFlow (условия по приоритету/филиалу/сервису → действия: уведомить, ждать, эскалировать) с реальным исполнением поверх маршрутизации. Здесь — только список сохранённых сценариев."
-      />
-      <div className="mt-4 space-y-2">
+      <div className="mb-6 flex items-start justify-between">
+        <PageHeader title="Сценарии" subtitle="Визуальный no-code конструктор обработки и эскалации алертов" />
+        <Link to="/scenarios/new" className="rounded-md bg-accent px-3 py-1.5 text-sm text-white hover:opacity-90">
+          + Создать сценарий
+        </Link>
+      </div>
+      <div className="space-y-2">
         {data?.length ? (
           data.map((s) => (
-            <Card key={s.id} className="flex items-center justify-between">
-              <div>
-                <div className="text-sm">{s.name}</div>
-                {s.description && <div className="text-xs text-muted">{s.description}</div>}
-              </div>
-              <span className="rounded bg-white/10 px-2 py-0.5 text-xs text-muted">{s.status}</span>
-            </Card>
+            <Link key={s.id} to={`/scenarios/${s.id}/edit`}>
+              <Card className="flex items-center justify-between hover:border-accent">
+                <div>
+                  <div className="text-sm">{s.name}</div>
+                  {s.description && <div className="text-xs text-muted">{s.description}</div>}
+                </div>
+                <span
+                  className={`rounded px-2 py-0.5 text-xs ${
+                    s.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-white/10 text-muted"
+                  }`}
+                >
+                  {s.status === "active" ? "активен" : "черновик"}
+                </span>
+              </Card>
+            </Link>
           ))
         ) : (
-          <p className="text-sm text-muted">Сохранённых сценариев пока нет.</p>
+          <p className="text-sm text-muted">Сохранённых сценариев пока нет — создайте первый.</p>
         )}
       </div>
     </div>

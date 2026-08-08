@@ -118,3 +118,57 @@ def test_trueconf_adapter_only_uses_outbox_contract(monkeypatch):
         assert notification.chat_id == "chat-1"
         assert notification.message_id == "message-1"
     assert bot.sent[0]["text"] == "alert"
+
+
+def test_record_write_failure_after_send_does_not_crash_or_retry(monkeypatch):
+    """Живой инцидент 2026-08-08: сообщение реально ушло получателю через
+    TrueConf, но запись notification упала на уникальном ограничении
+    (гонка — та же Problem уже была уведомлена другим путём). Раньше это
+    необработанное исключение роняло весь consumer и оставляло команду в
+    processing — на следующем TTL-sweep она переотправлялась бы получателю
+    ПОВТОРНО. Теперь: не падаем, не повторяем отправку, команда терминально
+    помечается sent."""
+    sessions = _database()
+    with sessions() as session:
+        problem = _problem(session)
+        # Уже существующее "отправлено" уведомление — та же (problem, type,
+        # chat_id) тройка, на которую наткнётся вторая команда.
+        existing = Notification(
+            problem_id=problem.id, type="NEW", chat_id="chat-1",
+            status="sent", created_at=datetime.utcnow(),
+        )
+        session.add(existing)
+
+        notification = Notification(
+            problem_id=problem.id, type="NEW", chat_id="recipient:ivanov",
+            status="queued", created_at=datetime.utcnow(),
+        )
+        command = _enqueue(session, notification)
+        command.status = "processing"
+        command.attempts = 1
+        session.commit()
+        command_id = command.id
+
+    monkeypatch.setattr(adapter, "get_session", sessions)
+    monkeypatch.setattr(adapter, "_parse_mode", lambda value: value)
+    adapter._chat_cache.clear()
+
+    class FakeBot:
+        sent = []
+
+        async def create_personal_chat(self, *, user_id):
+            return SimpleNamespace(chat_id="chat-1")  # тот же chat_id, что и у existing
+
+        async def send_message(self, **kwargs):
+            FakeBot.sent.append(kwargs)  # сообщение реально "ушло"
+            return SimpleNamespace(message_id="message-2")
+
+    # Не должно бросить исключение наружу.
+    asyncio.run(adapter.deliver_one(FakeBot(), "corp.local", command_id))
+
+    assert len(FakeBot.sent) == 1  # отправка была ровно одна — не задвоилась
+
+    with sessions() as session:
+        command = session.get(DeliveryOutbox, command_id)
+        assert command.status == "sent"  # не "processing" и не "pending" — TTL-sweep не переотправит
+        assert command.provider_chat_id == "chat-1"

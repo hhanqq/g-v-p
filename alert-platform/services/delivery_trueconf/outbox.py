@@ -105,22 +105,45 @@ async def deliver_one(bot: "Bot", domain: str, command_id: int) -> None:
             _retry(session, command, notification, str(exc))
             return
 
+        # Сообщение уже реально ушло получателю через TrueConf API — с этой
+        # точки нельзя ни повторить отправку (продублировали бы реальное
+        # сообщение человеку), ни дать исключению уронить процесс (раздел
+        # И5-стиль изоляция, тот же принцип, что и в pipeline-worker: сбой
+        # одной записи не должен останавливать весь consumer). Поэтому
+        # запись результата — в своей попытке; если она всё же не удалась
+        # (например, гонка уникальности при повторной постановке той же
+        # Problem другим путём), команда всё равно терминально помечается
+        # "sent" отдельной транзакцией, чтобы TTL-sweep не переотправил её.
         now = datetime.utcnow()
-        command.status = "sent"
-        command.sent_at = now
-        command.claimed_at = None
-        command.provider_chat_id = chat_id
-        command.last_error = None
-        # Для автоматизаций chat_id содержит доменный ключ шага сценария.
-        # Реальный provider chat хранится в outbox; замена ключа сломала бы
-        # возможность нескольких уведомлений одного сценария в тот же чат.
-        if notification.type not in ("SCENARIO", "SLA_BREACH"):
-            notification.chat_id = chat_id
-        notification.message_id = response.message_id
-        notification.status = "sent"
-        notification.sent_at = now
-        notification.error = None
-        session.commit()
+        try:
+            command.status = "sent"
+            command.sent_at = now
+            command.claimed_at = None
+            command.provider_chat_id = chat_id
+            command.last_error = None
+            # Для автоматизаций chat_id содержит доменный ключ шага сценария.
+            # Реальный provider chat хранится в outbox; замена ключа сломала бы
+            # возможность нескольких уведомлений одного сценария в тот же чат.
+            if notification.type not in ("SCENARIO", "SLA_BREACH"):
+                notification.chat_id = chat_id
+            notification.message_id = response.message_id
+            notification.status = "sent"
+            notification.sent_at = now
+            notification.error = None
+            session.commit()
+        except Exception as exc:  # noqa: BLE001
+            session.rollback()
+            print(f"delivery_trueconf: command={command_id} отправлено получателю, "
+                  f"но запись результата не удалась ({exc}) — помечаю sent без обновления notification")
+            with get_session() as fallback_session:
+                fallback_command = fallback_session.get(DeliveryOutbox, command_id)
+                if fallback_command is not None and fallback_command.status == "processing":
+                    fallback_command.status = "sent"
+                    fallback_command.sent_at = now
+                    fallback_command.claimed_at = None
+                    fallback_command.provider_chat_id = chat_id
+                    fallback_command.last_error = f"sent, but record update failed: {exc}"[:2000]
+                    fallback_session.commit()
 
 
 def _retry(session, command: DeliveryOutbox, notification: Notification, error: str) -> None:
@@ -141,5 +164,8 @@ async def delivery_loop(bot: "Bot", domain: str) -> None:
     while True:
         command_ids = claim_batch()
         for command_id in command_ids:
-            await deliver_one(bot, domain, command_id)
+            try:
+                await deliver_one(bot, domain, command_id)
+            except Exception as exc:  # noqa: BLE001 - защита второго уровня: один сбой не топит consumer
+                print(f"delivery_trueconf: необработанный сбой на command={command_id}: {exc}")
         await asyncio.sleep(POLL_INTERVAL_S)

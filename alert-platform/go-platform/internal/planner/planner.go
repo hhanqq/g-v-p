@@ -280,11 +280,43 @@ func (planner *Planner) planClosures(ctx context.Context) error {
 }
 
 func (planner *Planner) createDelivery(ctx context.Context, command delivery) (bool, error) {
+	// Идемпотентность держится на этом ключе (стабилен: problem+type+
+	// recipient, не зависит от chat_id). Раньше единственной защитой был
+	// ON CONFLICT DO NOTHING на notifications(problem_id,type,chat_id) —
+	// но chat_id у notifications ПЕРЕЗАПИСЫВАЕТСЯ Python-адаптером с
+	// плейсхолдера "recipient:X" на реальный provider chat_id после
+	// успешной отправки (services/delivery_trueconf/outbox.py). На
+	// следующем тике та же проверка уже не находит совпадения (плейсхолдер
+	// снова "recipient:X", а у существующей строки — реальный chat_id),
+	// создаёт лишнюю notifications-строку и падает только на INSERT в
+	// delivery_outbox — уже отправленные проблемы, остающиеся открытыми
+	// несколько тиков, спамили этой ошибкой на каждый тик. Проверяем по
+	// стабильному ключу ДО каких-либо вставок.
+	idempotencyKey := fmt.Sprintf(
+		"trueconf:problem:%d:type:%s:recipient:%s",
+		command.ProblemID, command.Type, command.Recipient,
+	)
+	if command.IdempotencySuffix != "" {
+		idempotencyKey += ":" + command.IdempotencySuffix
+	}
+
 	tx, err := planner.pool.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	var alreadyQueued bool
+	if err := tx.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM delivery_outbox WHERE idempotency_key = $1)`,
+		idempotencyKey,
+	).Scan(&alreadyQueued); err != nil {
+		return false, fmt.Errorf("check delivery idempotency: %w", err)
+	}
+	if alreadyQueued {
+		return false, nil
+	}
+
 	now := time.Now().UTC()
 	var notificationID int64
 	err = tx.QueryRow(ctx, `
@@ -301,13 +333,6 @@ func (planner *Planner) createDelivery(ctx context.Context, command delivery) (b
 	}
 	if err != nil {
 		return false, fmt.Errorf("insert notification: %w", err)
-	}
-	idempotencyKey := fmt.Sprintf(
-		"trueconf:problem:%d:type:%s:recipient:%s",
-		command.ProblemID, command.Type, command.Recipient,
-	)
-	if command.IdempotencySuffix != "" {
-		idempotencyKey += ":" + command.IdempotencySuffix
 	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO delivery_outbox(

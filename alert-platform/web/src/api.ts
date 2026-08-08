@@ -74,6 +74,8 @@ export interface IncidentMember {
   opened_at: string;
   resolved_at: string | null;
   ai_root_cause_hypothesis: string | null;
+  acknowledged_at: string | null;
+  acknowledged_by: string | null;
 }
 
 export interface IncidentDetail {

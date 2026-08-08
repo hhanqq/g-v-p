@@ -33,6 +33,11 @@ export default function IncidentDetail() {
             <StatusBadge status={root.status} />
           </div>
           <div className="text-sm">{root.object_id} · {root.symptom_class}</div>
+          {root.acknowledged_at && (
+            <div className="mt-1 text-xs text-emerald-400">
+              отреагировал: {root.acknowledged_by}, {new Date(root.acknowledged_at).toLocaleString("ru-RU")}
+            </div>
+          )}
           {root.ai_root_cause_hypothesis && (
             <div className="mt-3 rounded-md bg-accent/10 p-3 text-sm italic text-slate-200">
               Гипотеза ИИ: {root.ai_root_cause_hypothesis}
@@ -48,6 +53,11 @@ export default function IncidentDetail() {
             <div>
               <div className="text-sm">{m.object_id} · {m.symptom_class}</div>
               {m.rule_id && <div className="text-xs text-muted">по правилу {m.rule_id}</div>}
+              {m.acknowledged_at && (
+                <div className="text-xs text-emerald-400">
+                  отреагировал: {m.acknowledged_by}, {new Date(m.acknowledged_at).toLocaleString("ru-RU")}
+                </div>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <PriorityBadge priority={m.priority} />

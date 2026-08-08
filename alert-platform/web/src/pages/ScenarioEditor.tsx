@@ -17,13 +17,15 @@ import "reactflow/dist/style.css";
 import { api, ApiError, EmployeeListItem, ScenarioDetail } from "../api";
 import { Card, PageHeader } from "../components/ui";
 
-// Раздел «Сценарии», Этап 2 — визуальный редактор графа (ReactFlow):
-// свободное перетаскивание/соединение узлов, но на ИСПОЛНЕНИЕ граф
-// сводится к линейной цепочке (packages/scenarios/engine.py) — узел
-// «Условие» строго один, без ветвлений и циклов. Сервер (`/activate`)
-// сам проверяет это через parse_chain и понятно отвечает, если граф не
-// сводится — здесь мы просто даём инструмент рисовать, а не дублируем
-// валидацию клиентской копией той же логики.
+// Раздел «Сценарии», Этап 3 — визуальный редактор графа (ReactFlow):
+// свободное перетаскивание/соединение узлов, включая ветвление через
+// узлы-развилки «Проверка реакции»/«Проверка подписки» (два исходящих
+// ребра — Да/Нет). На ИСПОЛНЕНИЕ граф проверяется на отсутствие циклов
+// (packages/scenarios/engine.py::parse_graph, DAG), узел «Условие»
+// строго один на входе. Сервер (`/activate`) сам проверяет это и
+// понятно отвечает, если граф не проходит валидацию — здесь мы просто
+// даём инструмент рисовать, а не дублируем валидацию клиентской копией
+// той же логики.
 
 type PriorityMin = "" | "P0" | "P1" | "P2" | "P3";
 
@@ -45,7 +47,30 @@ interface WaitData {
   minutes?: number;
 }
 
-type StepData = ConditionData | NotifyData | WaitData;
+interface AckCheckData {
+  kind: "ack_check";
+}
+
+interface SubscriptionCheckData {
+  kind: "subscription_check";
+  employee_id?: number;
+  employee_label?: string;
+}
+
+type StepData = ConditionData | NotifyData | WaitData | AckCheckData | SubscriptionCheckData;
+
+function YesNoHandles() {
+  return (
+    <>
+      <div className="mt-2 flex justify-between text-[10px] text-muted">
+        <span>Нет ←</span>
+        <span>→ Да</span>
+      </div>
+      <Handle type="source" position={Position.Bottom} id="no" style={{ left: "25%" }} />
+      <Handle type="source" position={Position.Bottom} id="yes" style={{ left: "75%" }} />
+    </>
+  );
+}
 
 function ConditionNode({ data, selected }: NodeProps<ConditionData>) {
   return (
@@ -83,7 +108,35 @@ function WaitNode({ data, selected }: NodeProps<WaitData>) {
   );
 }
 
-const NODE_TYPES = { condition: ConditionNode, notify: NotifyNode, wait: WaitNode };
+function AckCheckNode({ selected }: NodeProps<AckCheckData>) {
+  return (
+    <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
+      <Handle type="target" position={Position.Top} />
+      <div className="mb-1 font-semibold text-slate-100">Проверка реакции</div>
+      <div className="text-muted">был ли ответ в TrueConf на уведомление</div>
+      <YesNoHandles />
+    </div>
+  );
+}
+
+function SubscriptionCheckNode({ data, selected }: NodeProps<SubscriptionCheckData>) {
+  return (
+    <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
+      <Handle type="target" position={Position.Top} />
+      <div className="mb-1 font-semibold text-slate-100">Проверка подписки</div>
+      <div className="text-muted">{data.employee_label ?? "есть хоть кто-то доступный"}</div>
+      <YesNoHandles />
+    </div>
+  );
+}
+
+const NODE_TYPES = {
+  condition: ConditionNode,
+  notify: NotifyNode,
+  wait: WaitNode,
+  ack_check: AckCheckNode,
+  subscription_check: SubscriptionCheckNode,
+};
 
 let idCounter = 1;
 function nextId(): string {
@@ -94,6 +147,8 @@ function nextId(): string {
 function defaultDataFor(kind: StepData["kind"]): StepData {
   if (kind === "condition") return { kind: "condition" };
   if (kind === "notify") return { kind: "notify" };
+  if (kind === "ack_check") return { kind: "ack_check" };
+  if (kind === "subscription_check") return { kind: "subscription_check" };
   return { kind: "wait", minutes: 30 };
 }
 
@@ -225,7 +280,7 @@ export default function ScenarioEditor() {
       <Link to="/scenarios" className="text-sm text-accent">← к списку сценариев</Link>
       <PageHeader
         title={isNew ? "Новый сценарий" : "Редактирование сценария"}
-        subtitle="Условие → Уведомить → [Подождать → Уведомить-эскалация] — граф рисуется свободно, но на исполнение сводится к линейной цепочке"
+        subtitle="Условие на входе, дальше — уведомления, ожидание и развилки (проверка реакции/подписки) с ветками Да/Нет; циклы не допускаются"
       />
 
       <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-3">
@@ -250,6 +305,12 @@ export default function ScenarioEditor() {
         </button>
         <button onClick={() => addNode("wait")} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-accent hover:text-white">
           + Подождать
+        </button>
+        <button onClick={() => addNode("ack_check")} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-accent hover:text-white">
+          + Проверка реакции
+        </button>
+        <button onClick={() => addNode("subscription_check")} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-accent hover:text-white">
+          + Проверка подписки
         </button>
         <span className="mx-2 h-4 w-px bg-border" />
         <span className={`rounded px-2 py-0.5 text-xs ${status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-white/10 text-muted"}`}>
@@ -364,6 +425,44 @@ export default function ScenarioEditor() {
                 onChange={(e) => updateSelectedData({ minutes: Number(e.target.value) || undefined })}
                 className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
               />
+            </div>
+          )}
+
+          {selectedNode?.data.kind === "ack_check" && (
+            <div className="space-y-2">
+              <p className="text-sm text-muted">
+                Развилка: «Да» — на уведомление по этому инциденту уже пришёл ответ в TrueConf (любой reply),
+                «Нет» — реакции пока не было. Настраиваемых полей нет — соедините исходящие рёбра «Да»/«Нет»
+                с нужными следующими узлами.
+              </p>
+            </div>
+          )}
+
+          {selectedNode?.data.kind === "subscription_check" && (
+            <div className="space-y-3">
+              <label className="mb-1 block text-xs text-muted">Сотрудник (необязательно)</label>
+              <select
+                value={selectedNode.data.employee_id ?? ""}
+                onChange={(e) => {
+                  const emp = employees?.find((x) => x.id === Number(e.target.value));
+                  updateSelectedData({
+                    employee_id: emp?.id,
+                    employee_label: emp ? emp.full_name ?? emp.trueconf_username : undefined,
+                  });
+                }}
+                className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+              >
+                <option value="">любой доступный (есть хоть кто-то подписан)</option>
+                {employees?.map((e) => (
+                  <option key={e.id} value={e.id}>
+                    {e.full_name ?? e.trueconf_username}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted">
+                «Да» — выбранный сотрудник (или хоть кто-то, если не выбран) реально получил бы уведомление по
+                текущим подпискам (раздел 8); «Нет» — иначе.
+              </p>
             </div>
           )}
 

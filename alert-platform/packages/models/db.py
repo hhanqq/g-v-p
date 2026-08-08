@@ -131,6 +131,15 @@ class Problem(Base):
     # первопричину одной площадки открылись синхронно), гипотеза ИИ
     # добавляется к тексту NEW-уведомления, явно маркированная как
     # предположение — раздел 13, структура Incident/Problem не меняется.
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    acknowledged_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Раздел «Сценарии», Этап 3 — факт реакции на инцидент: любой ответ
+    # (reply) в TrueConf на NEW-уведомление (packages/common/ack.py).
+    # Осознанно НЕ трогаем status/ACKNOWLEDGED (используется как активный
+    # статус в state_manager/correlator, но нигде не проставляется) —
+    # иначе пришлось бы чинить все фильтры по ("OPEN","FLAPPING") в
+    # delivery_trueconf, риск тихо остановить доставку. Первый ответ
+    # побеждает, повторные не перезаписывают.
 
 
 class CorrelationRule(Base):
@@ -408,12 +417,14 @@ class SLARule(Base):
 
 class Scenario(Base):
     """Раздел «Сценарии» — визуальный no-code конструктор (ReactFlow).
-    graph_json — узлы/рёбра как их сохранил редактор. Этап 2:
-    packages/scenarios/engine.py на ИСПОЛНЕНИЕ приводит граф к линейной
-    цепочке шагов (Условие → Уведомить → [Подождать → Уведомить]*) —
-    осознанное упрощение, не полный интерпретатор с ветвлением/циклами
-    (см. план платформы). status='active' — единственное, что реально
-    участвует в доставке; 'draft' сохраняется, но не исполняется."""
+    graph_json — узлы/рёбра как их сохранил редактор. Этап 3:
+    packages/scenarios/engine.py на ИСПОЛНЕНИЕ приводит граф к
+    ветвящейся структуре (узлы-развилки ack_check/subscription_check с
+    рёбрами "да"/"нет", остальные узлы — не более одного исходящего
+    ребра) — полный интерпретатор с произвольными циклами по-прежнему не
+    строится, только ветвление (см. план платформы, Этап 3).
+    status='active' — единственное, что реально участвует в доставке;
+    'draft' сохраняется, но не исполняется."""
     __tablename__ = "scenarios"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -427,20 +438,26 @@ class Scenario(Base):
 
 
 class ScenarioRun(Base):
-    """Раздел «Сценарии», Этап 2 — состояние исполнения одного активного
-    сценария на одной проблеме: на каком шаге линейной цепочки мы сейчас
-    и когда в него вошли (нужно для шагов «Подождать»). Один прогон на
-    пару (сценарий, проблема) — повторный проход конвейера не плодит
-    дублей."""
+    """Раздел «Сценарии», Этап 3 — состояние исполнения одного активного
+    сценария на одной проблеме: в каком узле ветвящегося графа мы сейчас
+    и когда в него вошли (нужно для шагов «Подождать»). `current_node_id`
+    — id узла ReactFlow (Этап 2 хранил линейный индекс — с ветвлением он
+    больше не имеет смысла). Один прогон на пару (сценарий, проблема) —
+    повторный проход конвейера не плодит дублей."""
     __tablename__ = "scenario_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     scenario_id: Mapped[int] = mapped_column(ForeignKey("scenarios.id"), index=True)
     problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id"), index=True)
-    current_step_index: Mapped[int] = mapped_column(Integer, default=0)
+    current_node_id: Mapped[str] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(16), default="running")  # running | done
     step_entered_at: Mapped[datetime] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime)
+    notified_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Сколько уведомлений уже отправлено этим прогоном — с ветвлением
+    # позиция узла в графе больше не определяет однозначно "это первое
+    # уведомление или эскалация" (одна и та же глубина достижима разными
+    # путями), поэтому считаем явно, а не выводим из current_node_id.
 
     __table_args__ = (UniqueConstraint("scenario_id", "problem_id", name="uq_scenario_run_scenario_problem"),)
 

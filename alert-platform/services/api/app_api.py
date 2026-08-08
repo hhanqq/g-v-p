@@ -21,7 +21,7 @@ from packages.common.audit import log_action
 from packages.common.db import get_session
 from packages.models.db import (CmdbObject, EmployeeAvailability, Event, Incident, IncidentProblem,
                                  Problem, SLARule, Scenario, Signal, Subscriber, Subscription)
-from packages.scenarios.engine import parse_chain
+from packages.scenarios.engine import parse_graph
 from services.api import metrics
 
 router = APIRouter(prefix="/api")
@@ -113,7 +113,9 @@ def get_incident(incident_id: int, user: dict = Depends(session_auth.require_ses
                  "symptom_class": p.symptom_class, "status": p.status, "priority": p.priority,
                  "opened_at": p.opened_at.isoformat(),
                  "resolved_at": p.resolved_at.isoformat() if p.resolved_at else None,
-                 "ai_root_cause_hypothesis": p.ai_root_cause_hypothesis}
+                 "ai_root_cause_hypothesis": p.ai_root_cause_hypothesis,
+                 "acknowledged_at": p.acknowledged_at.isoformat() if p.acknowledged_at else None,
+                 "acknowledged_by": p.acknowledged_by}
                 for ip, p in members
             ],
         }
@@ -267,7 +269,7 @@ def set_employee_availability(employee_id: int, payload: AvailabilityRequest,
 # --- Сценарии (раздел «Сценарии», Этап 2 — редактор + исполнение) --------------
 # Исполнение самого графа — packages/scenarios/engine.py, вызывается из
 # services/delivery_trueconf/main.py::run_scenarios. Здесь только CRUD +
-# активация (с серверной валидацией через parse_chain — раздел И5: кривой
+# активация (с серверной валидацией через parse_graph — раздел И5: кривой
 # граф не должен молча "исполняться" никак).
 
 @router.get("/scenarios")
@@ -328,7 +330,7 @@ def update_scenario(scenario_id: int, payload: ScenarioUpdateRequest,
         if payload.graph_json is not None:
             row.graph_json = payload.graph_json
             if row.status == "active":
-                # раздел И5 — граф изменился, старая проверка parse_chain
+                # раздел И5 — граф изменился, старая проверка parse_graph
                 # больше не гарантированно верна: снимаем с исполнения,
                 # пока не подтвердят заново через /activate.
                 row.status = "draft"
@@ -343,7 +345,7 @@ def activate_scenario(scenario_id: int, user: dict = Depends(session_auth.requir
         row = session.get(Scenario, scenario_id)
         if row is None:
             raise HTTPException(404, "Сценарий не найден")
-        if parse_chain(row.graph_json) is None:
+        if parse_graph(row.graph_json) is None:
             raise HTTPException(
                 400, "Граф не сводится к линейной цепочке: нужен один узел «Условие» на входе, "
                      "без ветвлений и циклов (раздел «Сценарии», Этап 2)")

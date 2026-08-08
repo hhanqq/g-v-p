@@ -1,8 +1,12 @@
 """Бот TrueConf — раздел 9, M4+M5: доставка NEW/CLOSURE/SUPPLEMENT по
 подпискам (раздел 8), а не в один захардкоженный тестовый чат.
 
-Осознанный вырез объёма: раздел 9.4 (ответы на уведомления — «взял»,
-«не мой», «следствие») не реализован — это M8.
+Раздел 9.4 (ответы на уведомления) реализован частично, Этап 3: любой
+ответ (reply) на NEW засчитывается как факт реакции на инцидент
+(`packages.common.ack.mark_acknowledged`, используется узлом-развилкой
+«Проверка реакции» в сценариях). Полная трёхвариантная семантика
+(«взял»/«не мой»/«следствие», с перемаршрутизацией и диалогом
+корреляции) остаётся вне объёма — это M8/M9.
 
 Адресация (раздел 8, M5): для каждой Problem `resolve_recipients()`
 (packages/common/routing.py) вычисляет список TrueConf-логинов подписчиков
@@ -35,12 +39,13 @@ from trueconf.utils._ssl import _build_ssl_context
 from trueconf.utils._token import _get_auth_token
 
 from packages.ai.recommend import checklist_for, recommend_remediation
+from packages.common.ack import mark_acknowledged
 from packages.common.db import engine, get_session
 from packages.common.routing import owning_service_ids, owning_subsidiaries, resolve_recipients
 from packages.models.db import (Base, CmdbObject, CmdbService, CmdbServiceObject,
                                  Event, Incident, IncidentProblem, Notification, Problem, Scenario,
                                  ScenarioRun, Signal, SLARule, SlaBreachNotice, Subscriber, Subscription)
-from packages.scenarios.engine import matches_condition, next_action, parse_chain
+from packages.scenarios.engine import DECISION_TYPES, advance, matches_condition, parse_graph
 from services.delivery_trueconf.llm_summary import build_prompt, summarize_incident
 from services.delivery_trueconf.templates import (format_duration, render_closure,
                                                     render_duplicate_note, render_new,
@@ -85,13 +90,25 @@ def _get_or_create_subscriber_with_token(session, username: str) -> Subscriber:
 
 @router.message()
 async def on_any_message(message: Message):
+    if message.reply_message_id:
+        # Раздел «Сценарии», Этап 3 — минимальный срез раздела 9.4: любой
+        # ответ на NEW-уведомление засчитывается как факт реакции на
+        # инцидент (узел-развилка «Проверка реакции»). Полная семантика
+        # «взял»/«не мой»/«следствие» (M8/M9) сюда не входит.
+        username = message.author.id.split("@", 1)[0]
+        with get_session() as session:
+            acknowledged = mark_acknowledged(session, message.reply_message_id, username)
+        if acknowledged:
+            await message.answer("Принято, отмечено как реакция на инцидент.")
+        return
+
     text = (message.text or "").strip().lower()
     if text in ("/старт", "/start"):
         await message.answer(
             "Бот «Диспетчер» на связи. Присылаю уведомления NEW/CLOSURE по проблемам "
             "и инцидентам.\nЧтобы настроить, какие уведомления вам приходят — команда "
-            "/кабинет.\nОтветы на уведомления пока не обрабатываются — это отдельный "
-            "этап (раздел 9.4)."
+            "/кабинет.\nОтвет (reply) на NEW-уведомление засчитывается как реакция на "
+            "инцидент; полная обработка команд в ответах — отдельный этап (раздел 9.4)."
         )
     elif text in ("/кабинет", "/подписки", "/subscriptions"):
         username = message.author.id.split("@", 1)[0]
@@ -352,9 +369,34 @@ async def send_scenario_notify(bot: Bot, session, *, problem: Problem, scenario:
     session.commit()
 
 
+def _scenario_facts(session, graph, problem: Problem) -> dict[str, bool]:
+    """Считает булев факт на каждый узел-развилку графа ДО вызова
+    advance() — сама advance() остаётся чистой функцией без обращения к
+    БД (см. packages/scenarios/engine.py)."""
+    facts: dict[str, bool] = {}
+    recipients: list[str] | None = None
+    for node_id, step in graph.nodes.items():
+        step_type = step.get("type")
+        if step_type not in DECISION_TYPES:
+            continue
+        if step_type == "ack_check":
+            facts[node_id] = problem.acknowledged_at is not None
+        elif step_type == "subscription_check":
+            if recipients is None:
+                recipients = resolve_recipients(session, problem)
+            employee_id = step.get("employee_id")
+            if employee_id:
+                subscriber = session.get(Subscriber, employee_id)
+                facts[node_id] = bool(subscriber and subscriber.trueconf_username in recipients)
+            else:
+                facts[node_id] = bool(recipients)
+    return facts
+
+
 async def run_scenarios(bot: Bot, session, domain: str) -> None:
-    """Раздел «Сценарии», Этап 2 — packages/scenarios/engine.py на каждый
-    тик продвигает активные сценарии по открытым проблемам. В отличие от
+    """Раздел «Сценарии» — packages/scenarios/engine.py на каждый тик
+    продвигает активные сценарии по открытым проблемам, включая узлы-
+    развилки (Проверка реакции/Проверка подписки, Этап 3). В отличие от
     SUPPLEMENT здесь нет обращения к LLM, поэтому фоновая задача не нужна —
     отправка идёт синхронно внутри самого тика (см. план платформы)."""
     now = datetime.utcnow()
@@ -368,10 +410,10 @@ async def run_scenarios(bot: Bot, session, domain: str) -> None:
         return
 
     for scenario in active_scenarios:
-        chain = parse_chain(scenario.graph_json)
-        if chain is None:
-            continue  # раздел И5 — сценарий с графом, не сводящимся к цепочке, просто не исполняется
-        condition = chain[0]
+        graph = parse_graph(scenario.graph_json)
+        if graph is None:
+            continue  # раздел И5 — сценарий с графом, не проходящим валидацию, просто не исполняется
+        condition = graph.nodes[graph.root_id]
         for problem in open_problems:
             run = session.execute(
                 select(ScenarioRun).where(ScenarioRun.scenario_id == scenario.id,
@@ -382,31 +424,36 @@ async def run_scenarios(bot: Bot, session, domain: str) -> None:
                 if not matches_condition(condition, problem, owning):
                     continue
                 run = ScenarioRun(scenario_id=scenario.id, problem_id=problem.id,
-                                   current_step_index=0, status="running",
+                                   current_node_id=graph.root_id, status="running",
                                    step_entered_at=now, created_at=now)
                 session.add(run)
                 session.flush()
             if run.status != "running":
                 continue
 
-            outcome, step, new_index, new_entered_at = next_action(
-                run.current_step_index, run.step_entered_at, chain, problem.status, now,
+            facts = _scenario_facts(session, graph, problem)
+            outcome, step, new_node_id, new_entered_at = advance(
+                run.current_node_id, run.step_entered_at, graph, problem.status, facts, now,
             )
             if outcome == "wait":
-                run.current_step_index, run.step_entered_at = new_index, new_entered_at
+                run.current_node_id, run.step_entered_at = new_node_id, new_entered_at
                 session.commit()
                 continue
             if outcome == "done":
-                run.status, run.current_step_index = "done", new_index
+                run.status, run.current_node_id = "done", new_node_id
                 session.commit()
                 continue
 
             # outcome == "notify" — шаг сразу помечается пройденным (до отправки),
             # чтобы сбой сети не заставил повторять его на каждом следующем тике.
-            # Позиция уведомления в цепочке (new_index - 1): 1 — первое, сразу
-            # после условия; больше 1 — эскалация после хотя бы одного «Подождать».
-            is_escalation = (new_index - 1) > 1
-            run.current_step_index, run.step_entered_at = new_index, new_entered_at
+            # С ветвлением позиция узла в графе больше не определяет однозначно
+            # "первое уведомление или эскалация" — считаем явно (notified_count).
+            is_escalation = run.notified_count > 0
+            run.notified_count += 1
+            if new_node_id is None:
+                run.status = "done"  # дальше графа нет — прогон завершён этим уведомлением
+            else:
+                run.current_node_id, run.step_entered_at = new_node_id, new_entered_at
             session.commit()
 
             employee_id = step.get("employee_id")

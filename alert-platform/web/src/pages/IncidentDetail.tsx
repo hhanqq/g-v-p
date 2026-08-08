@@ -39,7 +39,7 @@ export default function IncidentDetail() {
             </div>
           )}
           {root.ai_root_cause_hypothesis && (
-            <div className="mt-3 rounded-md bg-accent/10 p-3 text-sm italic text-slate-200">
+            <div className="mt-3 rounded-md bg-accent/10 p-3 text-sm italic text-fg">
               Гипотеза ИИ: {root.ai_root_cause_hypothesis}
             </div>
           )}

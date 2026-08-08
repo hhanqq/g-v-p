@@ -148,6 +148,9 @@ func (planner *Planner) Tick(ctx context.Context) error {
 	if err := planner.planSLABreaches(ctx); err != nil {
 		return err
 	}
+	if err := planner.planAIAnalysisRequests(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -355,11 +358,11 @@ func (planner *Planner) createDelivery(ctx context.Context, command delivery) (b
 func (planner *Planner) loadProblem(ctx context.Context, problemID int64) (ProblemData, error) {
 	var problem ProblemData
 	var incidentID sql.NullInt64
-	var priority, objectID, site, serviceName, hypothesis sql.NullString
+	var priority, objectID, equipmentType, site, serviceName, hypothesis sql.NullString
 	var resolvedAt, acknowledgedAt sql.NullTime
 	err := planner.pool.QueryRow(ctx, `
 		SELECT p.id, p.incident_id, p.priority, p.object_id,
-		       COALESCE(object.name, p.object_id, 'неизвестный объект'),
+		       COALESCE(object.name, p.object_id, 'неизвестный объект'), object.equipment_type,
 		       p.site, service.name, p.symptom_class, p.ai_root_cause_hypothesis,
 		       COALESCE(original.raw_body, '(оригинал не найден)'),
 		       COALESCE(original.source_system, 'unknown'), p.opened_at, p.resolved_at,
@@ -382,7 +385,7 @@ func (planner *Planner) loadProblem(ctx context.Context, problemID int64) (Probl
 			LIMIT 1
 		) original ON TRUE
 		WHERE p.id = $1`, problemID).Scan(
-		&problem.ID, &incidentID, &priority, &objectID, &problem.ObjectName,
+		&problem.ID, &incidentID, &priority, &objectID, &problem.ObjectName, &equipmentType,
 		&site, &serviceName, &problem.SymptomClass, &hypothesis,
 		&problem.OriginalBody, &problem.SourceSystem, &problem.OpenedAt,
 		&resolvedAt, &problem.ClosedByReconciliation, &acknowledgedAt,
@@ -393,6 +396,7 @@ func (planner *Planner) loadProblem(ctx context.Context, problemID int64) (Probl
 	problem.IncidentID = int64Ptr(incidentID)
 	problem.Priority = stringPtr(priority)
 	problem.ObjectID = stringPtr(objectID)
+	problem.EquipmentType = stringPtr(equipmentType)
 	problem.Site = stringPtr(site)
 	problem.ServiceName = stringPtr(serviceName)
 	problem.AIRootCauseHypothesis = stringPtr(hypothesis)

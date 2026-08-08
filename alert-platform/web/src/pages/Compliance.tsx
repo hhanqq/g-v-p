@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { ThemeToggle } from "../theme";
 
 interface ComplianceMetrics {
   delivered_pct: number | null;
@@ -138,10 +139,13 @@ export default function Compliance() {
   }
 
   return (
-    <div className="mx-auto min-h-screen max-w-5xl px-4 py-10 text-slate-100">
-      <Link to="/" className="text-sm text-accent">
-        ← платформа «Диспетчер»
-      </Link>
+    <div className="mx-auto min-h-screen max-w-5xl px-4 py-10 text-fg">
+      <div className="flex items-center justify-between">
+        <Link to="/" className="text-sm text-accent">
+          ← платформа «Диспетчер»
+        </Link>
+        <ThemeToggle />
+      </div>
       <h1 className="mt-3 text-2xl font-semibold">Соответствие критериям оценки кейса</h1>
       <p className="mt-2 max-w-2xl text-sm text-muted">
         Каждый пункт ниже — ссылка на живую страницу платформы, не макет. Экономика и презентация —
@@ -156,7 +160,7 @@ export default function Compliance() {
               <ScoreBadge score={c.score} />
             </div>
             <div className="mt-1 text-[11px] uppercase tracking-wide text-muted">вес {c.weight}</div>
-            <ul className="mt-3 space-y-1.5 text-xs leading-relaxed text-slate-300">
+            <ul className="mt-3 space-y-1.5 text-xs leading-relaxed text-fg">
               {c.points.map((p, i) => (
                 <li key={i} dangerouslySetInnerHTML={{ __html: `• ${p}` }} />
               ))}
@@ -181,7 +185,7 @@ export default function Compliance() {
         </button>
         {error && <p className="mt-3 text-xs text-red-400">Ошибка запроса: {error}</p>}
         {result && (
-          <pre className="mt-4 whitespace-pre-wrap rounded-lg bg-bg p-4 font-mono text-xs text-slate-300">
+          <pre className="mt-4 whitespace-pre-wrap rounded-lg bg-bg p-4 font-mono text-xs text-fg">
             {`Время запроса: ${result.requested_at}\nЗадержка: ${result.elapsed_seconds} с\nМодель: ${result.model}\n\nВопрос: ${result.prompt}\n\nОтвет модели:\n${result.reply ?? "(нет ответа — ИИ недоступна, раздел И5)"}`}
           </pre>
         )}

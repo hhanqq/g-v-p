@@ -23,7 +23,7 @@ function Sparkline({ series }: { series: [string, number][] }) {
             className="rounded-t bg-accent/70 transition-colors group-hover:bg-accent"
             style={{ height: `${Math.max(2, (count / max) * 100)}%` }}
           />
-          <div className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded bg-bg px-1.5 py-0.5 text-[10px] text-slate-100 group-hover:block">
+          <div className="pointer-events-none absolute -top-6 left-1/2 hidden -translate-x-1/2 whitespace-nowrap rounded bg-bg px-1.5 py-0.5 text-[10px] text-fg group-hover:block">
             {date.slice(5)} · {count}
           </div>
         </div>

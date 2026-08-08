@@ -26,7 +26,7 @@ export default function Incidents() {
             key={f.label}
             onClick={() => setParams(f.value ? { status: f.value } : {})}
             className={`rounded-md px-3 py-1.5 text-sm ${
-              status === f.value ? "bg-accent text-white" : "bg-card text-muted hover:text-slate-100"
+              status === f.value ? "bg-accent text-white" : "bg-card text-muted hover:text-fg"
             }`}
           >
             {f.label}
@@ -52,7 +52,7 @@ export default function Incidents() {
             </thead>
             <tbody>
               {data.map((inc) => (
-                <tr key={inc.id} className="border-t border-border hover:bg-white/5">
+                <tr key={inc.id} className="border-t border-border hover:bg-fg/5">
                   <td className="px-4 py-2">
                     <Link to={`/incidents/${inc.id}`} className="text-accent">
                       INC-{String(inc.id).padStart(4, "0")}

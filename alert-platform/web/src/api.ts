@@ -136,6 +136,39 @@ export interface EquipmentDetail extends EquipmentListItem {
     incident_id: number | null;
     duplicate_of_problem_id: number | null;
   }[];
+  responsible_groups: { id: number; name: string }[];
+}
+
+export interface GroupListItem {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  member_count: number;
+  equipment_scope_count: number;
+}
+
+export interface GroupMember {
+  subscriber_id: number;
+  trueconf_username: string;
+  full_name: string | null;
+}
+
+export interface GroupEquipmentScope {
+  id: number;
+  object_id: string | null;
+  object_name: string | null;
+  equipment_type: string | null;
+  site: string | null;
+}
+
+export interface GroupDetail {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  members: GroupMember[];
+  equipment_scope: GroupEquipmentScope[];
 }
 
 export interface EmployeeListItem {

@@ -93,8 +93,15 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		case "ack_check":
 			facts[id] = problem.AcknowledgedAt != nil
 		case "subscription_check":
+			groupID := int64(number(node.Data["group_id"]))
 			employeeID := int64(number(node.Data["employee_id"]))
-			if employeeID == 0 {
+			if groupID != 0 {
+				members, err := planner.groupMemberUsernames(ctx, groupID)
+				if err != nil {
+					return err
+				}
+				facts[id] = len(members) > 0
+			} else if employeeID == 0 {
 				facts[id] = len(recipients) > 0
 			} else {
 				var username string
@@ -124,23 +131,34 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		if err != nil {
 			return err
 		}
-		employeeID := int64(number(outcome.Step.Data["employee_id"]))
-		if employeeID == 0 {
-			return nil
+		groupID := int64(number(outcome.Step.Data["group_id"]))
+		var usernames []string
+		if groupID != 0 {
+			usernames, err = planner.groupMemberUsernames(ctx, groupID)
+			if err != nil {
+				return err
+			}
+		} else if employeeID := int64(number(outcome.Step.Data["employee_id"])); employeeID != 0 {
+			var username string
+			if err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username); errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			} else if err != nil {
+				return err
+			}
+			usernames = []string{username}
 		}
-		var username string
-		if err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username); errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		} else if err != nil {
-			return err
+		for _, username := range usernames {
+			_, err = planner.createDelivery(ctx, delivery{
+				ProblemID: problemID, Type: "SCENARIO", Recipient: username,
+				ChatID:            fmt.Sprintf("scenario:%d:%d:%s", scenarioID, notified+1, username),
+				Text:              RenderScenario(problem, scenarioName, notified > 0),
+				IdempotencySuffix: fmt.Sprintf("scenario:%d:notification:%d", scenarioID, notified+1),
+			})
+			if err != nil {
+				return err
+			}
 		}
-		_, err = planner.createDelivery(ctx, delivery{
-			ProblemID: problemID, Type: "SCENARIO", Recipient: username,
-			ChatID:            fmt.Sprintf("scenario:%d:%d:%s", scenarioID, notified+1, username),
-			Text:              RenderScenario(problem, scenarioName, notified > 0),
-			IdempotencySuffix: fmt.Sprintf("scenario:%d:notification:%d", scenarioID, notified+1),
-		})
-		return err
+		return nil
 	}
 	return nil
 }
@@ -155,6 +173,16 @@ func (planner *Planner) matchesScenarioCondition(ctx context.Context, problem Pr
 	}
 	if symptom, _ := data["symptom_class"].(string); symptom != "" && symptom != problem.SymptomClass {
 		return false
+	}
+	if objectID, _ := data["object_id"].(string); objectID != "" {
+		if problem.ObjectID == nil || *problem.ObjectID != objectID {
+			return false
+		}
+	}
+	if equipmentType, _ := data["equipment_type"].(string); equipmentType != "" {
+		if problem.EquipmentType == nil || *problem.EquipmentType != equipmentType {
+			return false
+		}
 	}
 	if subsidiary, _ := data["subsidiary"].(string); subsidiary != "" {
 		if problem.ObjectID == nil {

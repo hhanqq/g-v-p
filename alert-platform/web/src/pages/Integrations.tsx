@@ -5,7 +5,7 @@ import { Link } from "react-router-dom";
 
 const STATUS_STYLE: Record<IntegrationStatus["status"], string> = {
   active: "bg-emerald-500/15 text-emerald-400",
-  planned: "bg-slate-500/15 text-slate-400",
+  planned: "bg-slate-500/15 text-muted",
   open_question: "bg-amber-500/15 text-amber-400",
 };
 
@@ -39,7 +39,7 @@ export default function Integrations() {
       </div>
       <div className="mt-4 flex gap-3">
         <Link to="/sources" className="rounded-md bg-accent px-4 py-2 text-sm text-white">Управление источниками</Link>
-        <Link to="/audit" className="rounded-md bg-card px-4 py-2 text-sm text-slate-200">Открыть аудит</Link>
+        <Link to="/audit" className="rounded-md bg-card px-4 py-2 text-sm text-fg">Открыть аудит</Link>
       </div>
     </div>
   );

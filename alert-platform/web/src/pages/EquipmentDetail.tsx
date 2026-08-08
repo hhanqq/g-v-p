@@ -5,6 +5,7 @@ import ReactFlow, { Background, Edge, MarkerType, Node } from "reactflow";
 import "reactflow/dist/style.css";
 import { api, EquipmentDetail as EquipmentDetailType } from "../api";
 import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
+import { useTheme } from "../theme";
 
 // Раздел «Оборудование» кейса пользователя — карточка объекта с историей
 // и графом связанных алертов, два режима анализа. "Текущий инцидент" —
@@ -18,6 +19,7 @@ import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
 
 export default function EquipmentDetail() {
   const { id } = useParams();
+  const { theme } = useTheme();
   const [mode, setMode] = useState<"history" | "current">("history");
 
   const { data, isLoading } = useQuery<EquipmentDetailType>({
@@ -124,6 +126,31 @@ export default function EquipmentDetail() {
         <Card><div className="text-xs text-muted">Введено в эксплуатацию</div><div className="text-sm">{data.install_date ?? "—"}</div></Card>
       </div>
 
+      <Card className="mb-4">
+        <div className="text-xs text-muted">Ответственные группы</div>
+        {data.responsible_groups.length === 0 ? (
+          <div className="mt-1 text-sm text-muted">
+            Не назначены — настройте в разделе{" "}
+            <Link to="/groups" className="text-accent">
+              «Группы»
+            </Link>
+            .
+          </div>
+        ) : (
+          <div className="mt-1 flex flex-wrap gap-2">
+            {data.responsible_groups.map((g) => (
+              <Link
+                key={g.id}
+                to="/groups"
+                className="rounded bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent"
+              >
+                {g.name}
+              </Link>
+            ))}
+          </div>
+        )}
+      </Card>
+
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold">
           Граф связанных алертов
@@ -157,7 +184,7 @@ export default function EquipmentDetail() {
       <div className="h-96 rounded-xl border border-border bg-card">
         {graphHasContent ? (
           <ReactFlow nodes={nodes} edges={edges} fitView nodesDraggable={false} nodesConnectable={false} elementsSelectable={false}>
-            <Background color="#334155" gap={16} />
+            <Background color={theme === "dark" ? "#334155" : "#cbd5e1"} gap={16} />
           </ReactFlow>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted">

@@ -266,6 +266,24 @@ class DeliveryOutbox(Base):
     )
 
 
+class AiAnalysisRequest(Base):
+    """Запрос на ИИ-разбор алерта по инициативе сотрудника (reply в
+    TrueConf со словом-триггером). Python только фиксирует факт запроса —
+    сам разбор (сбор связанных алертов, вызов Ollama, формирование и
+    отправка ответа) делает Go delivery-planner, тот же узкий
+    факт-контракт, что уже есть у mark_acknowledged (packages/common/ack.py)."""
+    __tablename__ = "ai_analysis_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    problem_id: Mapped[int] = mapped_column(ForeignKey("problems.id"), index=True)
+    requested_by: Mapped[str] = mapped_column(String(128))
+    reply_to_notification_id: Mapped[int] = mapped_column(ForeignKey("notifications.id"))
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    # pending | done
+    created_at: Mapped[datetime] = mapped_column(DateTime)
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
 # --- Справочники CMDB (раздел 4, 11.2) --------------------------------------
 # Наполняются из того же datagen-инвентаря, что и генератор алертов
 # (scripts/seed_demo.py) — единый источник истины для резолвера и для

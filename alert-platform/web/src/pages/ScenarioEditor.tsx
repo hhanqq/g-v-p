@@ -14,8 +14,9 @@ import ReactFlow, {
   useNodesState,
 } from "reactflow";
 import "reactflow/dist/style.css";
-import { api, ApiError, EmployeeListItem, ScenarioDetail } from "../api";
+import { api, ApiError, EmployeeListItem, EquipmentListItem, GroupListItem, ScenarioDetail } from "../api";
 import { Card, PageHeader } from "../components/ui";
+import { useTheme } from "../theme";
 
 // Раздел «Сценарии», Этап 3 — визуальный редактор графа (ReactFlow):
 // свободное перетаскивание/соединение узлов, включая ветвление через
@@ -34,12 +35,17 @@ interface ConditionData {
   priority_min?: PriorityMin;
   subsidiary?: string;
   symptom_class?: string;
+  object_id?: string;
+  object_label?: string;
+  equipment_type?: string;
 }
 
 interface NotifyData {
   kind: "notify";
   employee_id?: number;
   employee_label?: string;
+  group_id?: number;
+  group_label?: string;
 }
 
 interface WaitData {
@@ -55,6 +61,8 @@ interface SubscriptionCheckData {
   kind: "subscription_check";
   employee_id?: number;
   employee_label?: string;
+  group_id?: number;
+  group_label?: string;
 }
 
 type StepData = ConditionData | NotifyData | WaitData | AckCheckData | SubscriptionCheckData;
@@ -75,11 +83,13 @@ function YesNoHandles() {
 function ConditionNode({ data, selected }: NodeProps<ConditionData>) {
   return (
     <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
-      <div className="mb-1 font-semibold text-slate-100">Условие</div>
+      <div className="mb-1 font-semibold text-fg">Условие</div>
       <div className="text-muted">
         {data.priority_min ? `приоритет ≤ ${data.priority_min}` : "любой приоритет"}
         {data.subsidiary ? ` · ${data.subsidiary}` : ""}
         {data.symptom_class ? ` · ${data.symptom_class}` : ""}
+        {data.object_label ? ` · ${data.object_label}` : ""}
+        {data.equipment_type ? ` · тип: ${data.equipment_type}` : ""}
       </div>
       <Handle type="source" position={Position.Bottom} />
     </div>
@@ -90,8 +100,8 @@ function NotifyNode({ data, selected }: NodeProps<NotifyData>) {
   return (
     <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
       <Handle type="target" position={Position.Top} />
-      <div className="mb-1 font-semibold text-slate-100">Уведомить</div>
-      <div className="text-muted">{data.employee_label ?? "сотрудник не выбран"}</div>
+      <div className="mb-1 font-semibold text-fg">Уведомить</div>
+      <div className="text-muted">{data.group_label ? `группа: ${data.group_label}` : data.employee_label ?? "получатель не выбран"}</div>
       <Handle type="source" position={Position.Bottom} />
     </div>
   );
@@ -101,7 +111,7 @@ function WaitNode({ data, selected }: NodeProps<WaitData>) {
   return (
     <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
       <Handle type="target" position={Position.Top} />
-      <div className="mb-1 font-semibold text-slate-100">Подождать</div>
+      <div className="mb-1 font-semibold text-fg">Подождать</div>
       <div className="text-muted">{data.minutes ? `${data.minutes} мин` : "минуты не заданы"}</div>
       <Handle type="source" position={Position.Bottom} />
     </div>
@@ -112,7 +122,7 @@ function AckCheckNode({ selected }: NodeProps<AckCheckData>) {
   return (
     <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
       <Handle type="target" position={Position.Top} />
-      <div className="mb-1 font-semibold text-slate-100">Проверка реакции</div>
+      <div className="mb-1 font-semibold text-fg">Проверка реакции</div>
       <div className="text-muted">был ли ответ в TrueConf на уведомление</div>
       <YesNoHandles />
     </div>
@@ -123,8 +133,8 @@ function SubscriptionCheckNode({ data, selected }: NodeProps<SubscriptionCheckDa
   return (
     <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
       <Handle type="target" position={Position.Top} />
-      <div className="mb-1 font-semibold text-slate-100">Проверка подписки</div>
-      <div className="text-muted">{data.employee_label ?? "есть хоть кто-то доступный"}</div>
+      <div className="mb-1 font-semibold text-fg">Проверка подписки</div>
+      <div className="text-muted">{data.group_label ? `группа: ${data.group_label}` : data.employee_label ?? "есть хоть кто-то доступный"}</div>
       <YesNoHandles />
     </div>
   );
@@ -161,6 +171,7 @@ export default function ScenarioEditor() {
   const isNew = !id;
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { theme } = useTheme();
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -182,6 +193,14 @@ export default function ScenarioEditor() {
   const { data: employees } = useQuery<EmployeeListItem[]>({
     queryKey: ["employees"],
     queryFn: () => api.get<EmployeeListItem[]>("/employees"),
+  });
+  const { data: groups } = useQuery<GroupListItem[]>({
+    queryKey: ["groups"],
+    queryFn: () => api.get<GroupListItem[]>("/groups"),
+  });
+  const { data: equipment } = useQuery<EquipmentListItem[]>({
+    queryKey: ["equipment"],
+    queryFn: () => api.get<EquipmentListItem[]>("/equipment"),
   });
 
   useEffect(() => {
@@ -313,16 +332,16 @@ export default function ScenarioEditor() {
           + Проверка подписки
         </button>
         <span className="mx-2 h-4 w-px bg-border" />
-        <span className={`rounded px-2 py-0.5 text-xs ${status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-white/10 text-muted"}`}>
+        <span className={`rounded px-2 py-0.5 text-xs ${status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-fg/10 text-muted"}`}>
           {status === "active" ? "активен" : "черновик"}
         </span>
         <span className="flex-1" />
         {status === "active" && !isNew && (
-          <button onClick={deactivate} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-white/10">
+          <button onClick={deactivate} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-fg/10">
             Деактивировать
           </button>
         )}
-        <button disabled={saving} onClick={() => save()} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-white/10 disabled:opacity-50">
+        <button disabled={saving} onClick={() => save()} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-fg/10 disabled:opacity-50">
           Сохранить
         </button>
         <button disabled={saving} onClick={saveAndActivate} className="rounded-md bg-accent px-3 py-1.5 text-sm text-white hover:opacity-90 disabled:opacity-50">
@@ -345,7 +364,7 @@ export default function ScenarioEditor() {
             onPaneClick={() => setSelectedId(null)}
             fitView
           >
-            <Background color="#334155" gap={16} />
+            <Background color={theme === "dark" ? "#334155" : "#cbd5e1"} gap={16} />
           </ReactFlow>
         </div>
 
@@ -387,31 +406,94 @@ export default function ScenarioEditor() {
                   className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
                 />
               </div>
+              <div>
+                <label className="mb-1 block text-xs text-muted">Оборудование (конкретный объект)</label>
+                <select
+                  value={selectedNode.data.object_id ?? ""}
+                  onChange={(e) => {
+                    const eq = equipment?.find((x) => x.id === e.target.value);
+                    updateSelectedData({ object_id: eq?.id, object_label: eq ? `${eq.name} (${eq.site})` : undefined });
+                  }}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="">любое</option>
+                  {equipment?.map((eq) => (
+                    <option key={eq.id} value={eq.id}>
+                      {eq.name} ({eq.site})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs text-muted">Тип оборудования</label>
+                <input
+                  value={selectedNode.data.equipment_type ?? ""}
+                  onChange={(e) => updateSelectedData({ equipment_type: e.target.value })}
+                  placeholder="например, plc_controller"
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                />
+              </div>
               <p className="text-xs text-muted">Незаполненное поле не сужает условие — та же логика, что и у подписок (раздел 8).</p>
             </div>
           )}
 
           {selectedNode?.data.kind === "notify" && (
             <div className="space-y-3">
-              <label className="mb-1 block text-xs text-muted">Сотрудник</label>
-              <select
-                value={selectedNode.data.employee_id ?? ""}
-                onChange={(e) => {
-                  const emp = employees?.find((x) => x.id === Number(e.target.value));
-                  updateSelectedData({
-                    employee_id: emp?.id,
-                    employee_label: emp ? emp.full_name ?? emp.trueconf_username : undefined,
-                  });
-                }}
-                className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
-              >
-                <option value="">не выбран</option>
-                {employees?.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.full_name ?? e.trueconf_username}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-3 text-xs">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    checked={!selectedNode.data.group_id}
+                    onChange={() => updateSelectedData({ group_id: undefined, group_label: undefined })}
+                  />
+                  Сотрудник
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    checked={!!selectedNode.data.group_id}
+                    onChange={() => updateSelectedData({ employee_id: undefined, employee_label: undefined })}
+                  />
+                  Группа
+                </label>
+              </div>
+              {!selectedNode.data.group_id ? (
+                <select
+                  value={selectedNode.data.employee_id ?? ""}
+                  onChange={(e) => {
+                    const emp = employees?.find((x) => x.id === Number(e.target.value));
+                    updateSelectedData({
+                      employee_id: emp?.id,
+                      employee_label: emp ? emp.full_name ?? emp.trueconf_username : undefined,
+                    });
+                  }}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="">не выбран</option>
+                  {employees?.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.full_name ?? e.trueconf_username}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={selectedNode.data.group_id ?? ""}
+                  onChange={(e) => {
+                    const grp = groups?.find((x) => x.id === Number(e.target.value));
+                    updateSelectedData({ group_id: grp?.id, group_label: grp?.name });
+                  }}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="">не выбрана</option>
+                  {groups?.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="text-xs text-muted">При выборе группы уведомление уходит всем её активным участникам.</p>
             </div>
           )}
 
@@ -440,28 +522,63 @@ export default function ScenarioEditor() {
 
           {selectedNode?.data.kind === "subscription_check" && (
             <div className="space-y-3">
-              <label className="mb-1 block text-xs text-muted">Сотрудник (необязательно)</label>
-              <select
-                value={selectedNode.data.employee_id ?? ""}
-                onChange={(e) => {
-                  const emp = employees?.find((x) => x.id === Number(e.target.value));
-                  updateSelectedData({
-                    employee_id: emp?.id,
-                    employee_label: emp ? emp.full_name ?? emp.trueconf_username : undefined,
-                  });
-                }}
-                className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
-              >
-                <option value="">любой доступный (есть хоть кто-то подписан)</option>
-                {employees?.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.full_name ?? e.trueconf_username}
-                  </option>
-                ))}
-              </select>
+              <div className="flex gap-3 text-xs">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    checked={!selectedNode.data.group_id}
+                    onChange={() => updateSelectedData({ group_id: undefined, group_label: undefined })}
+                  />
+                  Сотрудник
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    checked={!!selectedNode.data.group_id}
+                    onChange={() => updateSelectedData({ employee_id: undefined, employee_label: undefined })}
+                  />
+                  Группа
+                </label>
+              </div>
+              {!selectedNode.data.group_id ? (
+                <select
+                  value={selectedNode.data.employee_id ?? ""}
+                  onChange={(e) => {
+                    const emp = employees?.find((x) => x.id === Number(e.target.value));
+                    updateSelectedData({
+                      employee_id: emp?.id,
+                      employee_label: emp ? emp.full_name ?? emp.trueconf_username : undefined,
+                    });
+                  }}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="">любой доступный (есть хоть кто-то подписан)</option>
+                  {employees?.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.full_name ?? e.trueconf_username}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={selectedNode.data.group_id ?? ""}
+                  onChange={(e) => {
+                    const grp = groups?.find((x) => x.id === Number(e.target.value));
+                    updateSelectedData({ group_id: grp?.id, group_label: grp?.name });
+                  }}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="">не выбрана (проверка «есть хоть кто-то в группе»)</option>
+                  {groups?.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <p className="text-xs text-muted">
-                «Да» — выбранный сотрудник (или хоть кто-то, если не выбран) реально получил бы уведомление по
-                текущим подпискам (раздел 8); «Нет» — иначе.
+                «Да» — у выбранного сотрудника/группы (или хоть кого-то, если не выбран) реально сработала бы
+                доставка по текущим подпискам (раздел 8); «Нет» — иначе.
               </p>
             </div>
           )}

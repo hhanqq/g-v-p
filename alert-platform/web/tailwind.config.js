@@ -1,14 +1,16 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  darkMode: "class",
   theme: {
     extend: {
       colors: {
-        accent: "#2563eb",
-        bg: "#0f172a",
-        card: "#1e293b",
-        border: "#334155",
-        muted: "#94a3b8",
+        accent: "rgb(var(--c-accent) / <alpha-value>)",
+        bg: "rgb(var(--c-bg) / <alpha-value>)",
+        card: "rgb(var(--c-card) / <alpha-value>)",
+        border: "rgb(var(--c-border) / <alpha-value>)",
+        muted: "rgb(var(--c-muted) / <alpha-value>)",
+        fg: "rgb(var(--c-fg) / <alpha-value>)",
       },
     },
   },

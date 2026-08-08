@@ -81,6 +81,21 @@ func BuildSummaryPrompt(rootSymptom, rootObject, rootSite string, openedAt time.
 	)
 }
 
+func BuildOnDemandAnalysisPrompt(objectName, site, symptomClass string, openedAt time.Time, symptoms []Symptom) string {
+	lines := make([]string, 0, len(symptoms))
+	for _, symptom := range symptoms {
+		lines = append(lines, fmt.Sprintf("- %s (%s)", symptom.ObjectName, symptom.Class))
+	}
+	related := "нет данных о связанных алертах — инцидент не сформирован, разбор по одиночному алерту"
+	if len(lines) > 0 {
+		related = strings.Join(lines, "\n")
+	}
+	return fmt.Sprintf(
+		"Инцидент мониторинга промышленного предприятия. Дежурный инженер попросил разбор конкретного алерта.\nАлерт: %s на площадке %s, симптом %s, зафиксирован %s.\nСвязанные алерты в том же инциденте:\n%s\n\nДай развёрнутый разбор для дежурного инженера на русском (4-6 предложений): что вероятно произошло, как это связано с остальными алертами (если они есть), с чего начать диагностику. Используй только факты из данных выше, без домыслов. Не используй списки и заголовки — сплошной текст.",
+		objectName, site, symptomClass, openedAt.Format("2006-01-02 15:04:05"), related,
+	)
+}
+
 func BuildRecommendationPrompt(symptomClass, objectName, site string, related int, checklist []string) *string {
 	if len(checklist) == 0 {
 		return nil

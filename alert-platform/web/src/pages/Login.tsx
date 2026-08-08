@@ -1,6 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { FormEvent, useState } from "react";
 import { api, ApiError } from "../api";
+import { ThemeToggle } from "../theme";
 
 export default function Login() {
   const [username, setUsername] = useState("");
@@ -24,7 +25,8 @@ export default function Login() {
   }
 
   return (
-    <div className="flex h-screen items-center justify-center bg-bg">
+    <div className="relative flex h-screen items-center justify-center bg-bg">
+      <ThemeToggle className="absolute right-6 top-6" />
       <form onSubmit={onSubmit} className="w-80 rounded-xl border border-border bg-card p-8">
         <h1 className="mb-1 text-lg font-semibold">Диспетчер</h1>
         <p className="mb-6 text-sm text-muted">Вход через корпоративный LDAP-каталог</p>

@@ -114,6 +114,36 @@ func RenderSupplement(data SupplementData) string {
 	return strings.Join(lines, "\n")
 }
 
+type AIAnalysisData struct {
+	ProblemID    int64
+	IncidentID   *int64
+	ObjectName   string
+	SymptomClass string
+	Site         *string
+	Priority     *string
+	RelatedCount int
+	AIText       *string
+}
+
+func RenderAIAnalysis(data AIAnalysisData) string {
+	lines := []string{
+		fmt.Sprintf("🧠 <b>РАЗБОР ПО ЗАПРОСУ · %s</b>", DisplayID(data.ProblemID, data.IncidentID)),
+		fmt.Sprintf("Объект: %s · Симптом: %s · Площадка: %s · Приоритет: %s",
+			data.ObjectName, data.SymptomClass, valueOr(data.Site, "?"), valueOr(data.Priority, "?")),
+	}
+	if data.IncidentID != nil {
+		lines = append(lines, fmt.Sprintf("Связанных алертов в инциденте: %d", data.RelatedCount))
+	} else {
+		lines = append(lines, "Инцидент не сформирован — разбор по одиночному алерту")
+	}
+	if data.AIText != nil && *data.AIText != "" {
+		lines = append(lines, "", "<i>Разбор (гипотеза, требует проверки, сформирована ИИ):</i>", *data.AIText)
+	} else {
+		lines = append(lines, "", "ИИ временно недоступна — попробуйте попросить разбор ещё раз чуть позже.")
+	}
+	return strings.Join(lines, "\n")
+}
+
 func FormatDuration(duration time.Duration) string {
 	seconds := int64(duration.Seconds())
 	hours := seconds / 3600

@@ -35,7 +35,7 @@ export default function Alerts() {
               </thead>
               <tbody>
                 {data.items.map((a) => (
-                  <tr key={a.id} className="border-t border-border hover:bg-white/5">
+                  <tr key={a.id} className="border-t border-border hover:bg-fg/5">
                     <td className="px-4 py-2 text-muted">{new Date(a.occurred_at).toLocaleString("ru-RU")}</td>
                     <td className="px-4 py-2">{a.source_system} · {a.source_instance}</td>
                     <td className="px-4 py-2">{a.object_id ?? "—"}</td>

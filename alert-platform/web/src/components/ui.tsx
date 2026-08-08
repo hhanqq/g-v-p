@@ -9,8 +9,20 @@ export function PageHeader({ title, subtitle }: { title: string; subtitle?: stri
   );
 }
 
-export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-xl border border-border bg-card p-5 ${className}`}>{children}</div>;
+export function Card({
+  children,
+  className = "",
+  onClick,
+}: {
+  children: ReactNode;
+  className?: string;
+  onClick?: () => void;
+}) {
+  return (
+    <div className={`rounded-xl border border-border bg-card p-5 ${className}`} onClick={onClick}>
+      {children}
+    </div>
+  );
 }
 
 export function StatTile({ label, value }: { label: string; value: ReactNode }) {
@@ -26,11 +38,11 @@ const PRIORITY_COLOR: Record<string, string> = {
   P0: "bg-red-500/15 text-red-400",
   P1: "bg-orange-500/15 text-orange-400",
   P2: "bg-yellow-500/15 text-yellow-400",
-  P3: "bg-slate-500/15 text-slate-400",
+  P3: "bg-slate-500/15 text-muted",
 };
 
 export function PriorityBadge({ priority }: { priority: string | null }) {
-  const cls = PRIORITY_COLOR[priority ?? ""] ?? "bg-slate-500/15 text-slate-400";
+  const cls = PRIORITY_COLOR[priority ?? ""] ?? "bg-slate-500/15 text-muted";
   return <span className={`rounded px-2 py-0.5 text-xs font-medium ${cls}`}>{priority ?? "—"}</span>;
 }
 
@@ -54,7 +66,7 @@ export function EmptyState({ children }: { children: ReactNode }) {
 export function StagePlaceholder({ title, description }: { title: string; description: string }) {
   return (
     <Card className="border-dashed">
-      <div className="mb-2 inline-block rounded bg-white/10 px-2 py-0.5 text-[11px] text-muted">
+      <div className="mb-2 inline-block rounded bg-fg/10 px-2 py-0.5 text-[11px] text-muted">
         этап 2
       </div>
       <h3 className="mb-1 text-sm font-semibold">{title}</h3>

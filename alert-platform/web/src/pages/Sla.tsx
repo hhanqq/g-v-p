@@ -81,7 +81,7 @@ export default function Sla() {
               min={1}
               value={responseMinutes}
               onChange={(e) => setResponseMinutes(Number(e.target.value) || 0)}
-              className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-slate-100"
+              className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg"
             />
           </label>
           <label className="text-xs text-muted md:col-span-2">
@@ -91,7 +91,7 @@ export default function Sla() {
               min={1}
               value={resolutionMinutes}
               onChange={(e) => setResolutionMinutes(Number(e.target.value) || 0)}
-              className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-slate-100"
+              className="mt-1 w-full rounded-md border border-border bg-bg px-3 py-2 text-sm text-fg"
             />
           </label>
         </form>

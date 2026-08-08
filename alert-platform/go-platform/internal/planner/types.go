@@ -8,6 +8,7 @@ type ProblemData struct {
 	Priority               *string
 	ObjectID               *string
 	ObjectName             string
+	EquipmentType          *string
 	Site                   *string
 	ServiceName            *string
 	SymptomClass           string

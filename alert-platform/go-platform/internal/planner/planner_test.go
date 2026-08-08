@@ -155,3 +155,37 @@ func TestPromptsPreservePythonContract(t *testing.T) {
 		t.Fatalf("recommendation prompt drifted")
 	}
 }
+
+func TestOnDemandAnalysisPromptListsRelatedOrSaysStandalone(t *testing.T) {
+	withRelated := BuildOnDemandAnalysisPrompt(
+		"sw-01", "brd", "node_down", time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC),
+		[]Symptom{{ObjectName: "host-1", Class: "host_unreachable"}},
+	)
+	if !strings.Contains(withRelated, "host-1 (host_unreachable)") {
+		t.Fatalf("on-demand prompt dropped related symptom: %s", withRelated)
+	}
+	standalone := BuildOnDemandAnalysisPrompt("sw-01", "brd", "node_down", time.Date(2026, 8, 6, 1, 2, 3, 0, time.UTC), nil)
+	if !strings.Contains(standalone, "инцидент не сформирован") {
+		t.Fatalf("on-demand prompt should admit no incident when standalone: %s", standalone)
+	}
+}
+
+func TestRenderAIAnalysisFactsBeforeHypothesisAndDegradesGracefully(t *testing.T) {
+	incidentID := int64(3)
+	analysis := "Вероятно, отказ питания коммутатора."
+	withAI := RenderAIAnalysis(AIAnalysisData{
+		ProblemID: 5, IncidentID: &incidentID, ObjectName: "sw-01", SymptomClass: "node_down",
+		Site: ptr("brd"), Priority: ptr("P1"), RelatedCount: 2, AIText: &analysis,
+	})
+	if strings.Index(withAI, "Связанных алертов") > strings.Index(withAI, "гипотеза") {
+		t.Fatalf("AI text appeared before deterministic facts: %s", withAI)
+	}
+	if !strings.Contains(withAI, analysis) || !strings.Contains(withAI, "INC-0003") {
+		t.Fatalf("rendered analysis drifted: %s", withAI)
+	}
+
+	degraded := RenderAIAnalysis(AIAnalysisData{ProblemID: 5, ObjectName: "sw-01", SymptomClass: "node_down"})
+	if !strings.Contains(degraded, "ИИ временно недоступна") || !strings.Contains(degraded, "Инцидент не сформирован") {
+		t.Fatalf("degraded analysis should stay honest about missing AI and incident: %s", degraded)
+	}
+}

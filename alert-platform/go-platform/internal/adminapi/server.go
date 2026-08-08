@@ -89,6 +89,9 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		writeJSON(response, http.StatusOK, user)
 		return
 	}
+	if server.routeGroups(response, request, path) {
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/compliance-metrics" {
 		server.complianceMetrics(response, request)
 		return
@@ -877,11 +880,12 @@ type relatedProblem struct {
 
 type equipmentDetail struct {
 	equipmentListItem
-	Subnet          *string          `json:"subnet"`
-	InstallDate     *string          `json:"install_date"`
-	SpecJSON        *string          `json:"spec_json"`
-	RelatedProblems []relatedProblem `json:"related_problems"`
-	Interactions    map[string]any   `json:"interactions"`
+	Subnet            *string          `json:"subnet"`
+	InstallDate       *string          `json:"install_date"`
+	SpecJSON          *string          `json:"spec_json"`
+	RelatedProblems   []relatedProblem `json:"related_problems"`
+	Interactions      map[string]any   `json:"interactions"`
+	ResponsibleGroups []map[string]any `json:"responsible_groups"`
 }
 
 func (server *Server) getEquipment(response http.ResponseWriter, request *http.Request, _ map[string]any) {
@@ -950,7 +954,42 @@ func (server *Server) getEquipment(response http.ResponseWriter, request *http.R
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
+	item.ResponsibleGroups, err = server.equipmentResponsibleGroups(request.Context(), objectID)
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
 	writeJSON(response, http.StatusOK, item)
+}
+
+// equipmentResponsibleGroups — обратная сторона group_equipment_scope:
+// какие группы отвечают за это оборудование (по точному объекту, его
+// типу оборудования или площадке). Используется карточкой оборудования,
+// чтобы связь «группа ↔ оборудование» была видна с обеих сторон.
+func (server *Server) equipmentResponsibleGroups(ctx context.Context, objectID string) ([]map[string]any, error) {
+	rows, err := server.pool.Query(ctx, `
+		SELECT DISTINCT g.id, g.name
+		FROM group_equipment_scope scope
+		JOIN groups g ON g.id = scope.group_id
+		JOIN cmdb_objects object ON object.id = $1
+		WHERE (scope.object_id IS NULL OR scope.object_id = $1)
+		  AND (scope.equipment_type IS NULL OR scope.equipment_type = object.equipment_type)
+		  AND (scope.site IS NULL OR scope.site = object.site)
+		ORDER BY g.name`, objectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var id int64
+		var name string
+		if err := rows.Scan(&id, &name); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{"id": id, "name": name})
+	}
+	return items, rows.Err()
 }
 
 func (server *Server) listScenarios(response http.ResponseWriter, request *http.Request, _ map[string]any) {

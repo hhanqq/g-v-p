@@ -28,7 +28,7 @@ export default function Scenarios() {
                 </div>
                 <span
                   className={`rounded px-2 py-0.5 text-xs ${
-                    s.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-white/10 text-muted"
+                    s.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-fg/10 text-muted"
                   }`}
                 >
                   {s.status === "active" ? "активен" : "черновик"}

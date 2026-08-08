@@ -2,6 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, CurrentUser } from "../api";
+import { ThemeToggle } from "../theme";
 
 interface NavChild {
   label: string;
@@ -39,6 +40,7 @@ const NAV: NavItem[] = [
       { label: "Доступность", to: "/employees?view=availability" },
     ],
   },
+  { label: "Группы", to: "/groups", icon: "🧑‍🤝‍🧑" },
   { label: "Сценарии", to: "/scenarios", icon: "🧩", badge: "этап 2" },
   { label: "SLA", to: "/sla", icon: "⏱️", badge: "этап 2" },
   { label: "Аналитика", to: "/analytics", icon: "📈", badge: "этап 2" },
@@ -81,7 +83,7 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
                   }
                 }}
                 className={`flex w-full items-center justify-between px-5 py-2.5 text-left text-sm transition-colors ${
-                  isActive ? "bg-accent/15 text-white" : "text-slate-300 hover:bg-white/5"
+                  isActive ? "bg-accent/15 text-accent" : "text-fg hover:bg-fg/5"
                 }`}
               >
                 <span className="flex items-center gap-2.5">
@@ -90,7 +92,7 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
                 </span>
                 <span className="flex items-center gap-2">
                   {item.badge && (
-                    <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-muted">
+                    <span className="rounded bg-fg/10 px-1.5 py-0.5 text-[10px] text-muted">
                       {item.badge}
                     </span>
                   )}
@@ -110,7 +112,7 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
                       <NavLink
                         key={child.to}
                         to={child.to}
-                        className="block px-5 py-2 pl-12 text-sm text-muted hover:text-slate-100"
+                        className="block px-5 py-2 pl-12 text-sm text-muted hover:text-fg"
                       >
                         {child.label}
                       </NavLink>
@@ -124,14 +126,15 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
       </nav>
 
       <div className="border-t border-border px-5 py-4 text-sm">
-        <Link to="/compliance" className="mb-3 block text-xs text-muted hover:text-slate-100">
+        <ThemeToggle className="mb-3" />
+        <Link to="/compliance" className="mb-3 block text-xs text-muted hover:text-fg">
           ✅ Соответствие критериям кейса
         </Link>
         <div className="mb-2">
           <div>{user.username}</div>
           <div className="text-xs text-muted">{user.is_admin ? "администратор" : "сотрудник"}</div>
         </div>
-        <button onClick={logout} className="text-xs text-muted hover:text-slate-100">
+        <button onClick={logout} className="text-xs text-muted hover:text-fg">
           Выйти
         </button>
       </div>

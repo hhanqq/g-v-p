@@ -2,6 +2,26 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Светлая тема — значения по умолчанию. Тёмная — класс .dark на <html>,
+   выставляется до отрисовки (index.html) и переключателем (theme.tsx). */
+:root {
+  --c-bg: 248 250 252;
+  --c-card: 255 255 255;
+  --c-border: 226 232 240;
+  --c-muted: 100 116 139;
+  --c-fg: 15 23 42;
+  --c-accent: 37 99 235;
+}
+
+.dark {
+  --c-bg: 15 23 42;
+  --c-card: 30 41 59;
+  --c-border: 51 65 85;
+  --c-muted: 148 163 184;
+  --c-fg: 241 245 249;
+  --c-accent: 37 99 235;
+}
+
 body {
-  @apply bg-bg text-slate-100 antialiased;
+  @apply bg-bg text-fg antialiased;
 }

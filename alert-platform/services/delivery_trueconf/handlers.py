@@ -14,6 +14,7 @@ from trueconf.types import Message
 from packages.ai.daily_summary import build_prompt as build_daily_summary_prompt
 from packages.ai.daily_summary import summarize_day
 from packages.common.ack import mark_acknowledged
+from packages.common.ai_request import request_ai_analysis, wants_ai_help
 from packages.common.db import get_session
 from packages.common.routing import resolve_recipients
 from packages.models.db import Problem, Subscriber
@@ -63,9 +64,19 @@ def _daily_summary_facts(session, username: str, now: datetime) -> dict:
 async def on_any_message(message: Message) -> None:
     username = message.author.id.split("@", 1)[0]
     if message.reply_message_id:
+        reply_text = message.text or ""
         with get_session() as session:
             acknowledged = mark_acknowledged(session, message.reply_message_id, username)
-        if acknowledged:
+            ai_queued = (
+                request_ai_analysis(session, message.reply_message_id, username)
+                if wants_ai_help(reply_text) else False
+            )
+        if ai_queued:
+            await message.answer(
+                "Принял в анализ, разбираюсь — свяжу с историей связанных алертов и "
+                "пришлю сообщением ниже (обычно 10-30 секунд)."
+            )
+        elif acknowledged:
             await message.answer("Принято, отмечено как реакция на инцидент.")
         return
 
@@ -75,7 +86,9 @@ async def on_any_message(message: Message) -> None:
             "Бот «Диспетчер» на связи. Присылаю уведомления NEW/CLOSURE по проблемам "
             "и инцидентам.\nЧтобы настроить, какие уведомления вам приходят — команда "
             "/кабинет.\nТекущие алерты — /алерты, дневная сводка — /сводка.\n"
-            "Ответ на NEW отмечается как реакция на инцидент."
+            "Ответ на NEW отмечается как реакция на инцидент; ответьте словом "
+            "«анализ» на любое уведомление, чтобы попросить ИИ разобрать этот "
+            "алерт и связанные с ним."
         )
     elif text in ("/кабинет", "/подписки", "/subscriptions"):
         with get_session() as session:

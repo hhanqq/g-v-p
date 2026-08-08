@@ -1,0 +1,47 @@
+# Парсер Zabbix — раздел 5, стадия 1. Версионируемое YAML-описание, не код.
+# Селекторы — регулярные выражения (источник шлёт plain-text, не JSON).
+source_system: zabbix
+version: 1
+description: "Экспорт по шаблону действия Zabbix: PROBLEM/RESOLVED"
+
+state_map:
+  "PROBLEM": firing
+  "RESOLVED": resolved
+
+severity_map:            # раздел 7 — таблица паспорта источника
+  "Not classified": 0
+  "Information": 1
+  "Warning": 2
+  "Average": 3
+  "High": 4
+  "Disaster": 5
+
+time_format: "%Y.%m.%d %H:%M:%S"
+
+# Каждое поле — regex с ОДНОЙ группой захвата, re.MULTILINE.
+fields:
+  state_prefix: '(?m)^(PROBLEM|RESOLVED):'
+  title: '(?m)^(?:PROBLEM|RESOLVED):\s*(.+)$'
+  host_raw: '(?m)^Host:\s*([^\s(]+)'
+  ip_raw: '(?m)^Host:\s*[^\s(]+\s*\(([\d.]+)\)'
+  severity_raw: '(?m)^Severity:\s*(.+)$'
+  time_raw: '(?m)^Time:\s*(.+)$'
+  duration_raw: '(?m)^Duration:\s*(.+)$'
+
+required_fields: [state_prefix, title, host_raw, time_raw]
+# severity_raw отсутствует у части служебных сообщений — не обязателен (раздел 18.3 п.5).
+
+# Первое совпадение по title выигрывает. Без совпадения — symptom_class=unknown,
+# сообщение всё равно доставляется дословно (деградация в сторону шума, И5).
+symptom_rules:
+  - match: 'Unavailable by ICMP ping'
+    symptom_class: host_unreachable
+  - match: 'Free disk space is less than \d+% on volume\s+(\S+)'
+    symptom_class: disk_space
+    component_group: 1
+  - match: 'Service\s+(\S+)\s+is not running'
+    symptom_class: service_down
+    component_group: 1
+  - match: 'Input power lost on\s+(\S+)'
+    symptom_class: power_lost
+    component_group: 1

@@ -1,0 +1,9 @@
+scenario: unrelated_single
+description: >
+  Одиночный значимый алерт без связей — контроль того, что коррелятор
+  не создаёт связей там, где их нет (раздел 18.4, «не менее важен, чем первые»).
+probability_per_day: 1.0
+params: {}
+expected:
+  incidents: 1
+  correlated: false

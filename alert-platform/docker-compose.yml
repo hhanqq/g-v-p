@@ -1,0 +1,112 @@
+services:
+  ldap:
+    # Раздел «Безопасность» кейса: "реализована авторизация через LDAP/AD".
+    # glauth — настоящий сервер по LDAP-протоколу (bind, поиск группы), а
+    # не имитация в коде; конфиг — ldap/glauth.cfg (синтетические
+    # пользователи/группы, т.к. реальной корпоративной AD у синтетической
+    # компании нет и быть не может, раздел 18.8).
+    image: glauth/glauth:latest
+    volumes:
+      - ./ldap/glauth.cfg:/app/config/config.cfg:ro
+    ports: ["3893:389"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: alert
+      POSTGRES_PASSWORD: alert
+      POSTGRES_DB: alert_platform
+    ports: ["5433:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alert"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  gateway:
+    build: .
+    command: uvicorn services.gateway.main:app --host 0.0.0.0 --port 8080
+    # Хост-порт 8081, а не 8080 — 8080 на этой машине уже занят внутренним
+    # httpd TrueConf Server (webmanager backend).
+    ports: ["8081:8080"]
+    environment:
+      DATABASE_URL: postgresql+psycopg2://alert:alert@postgres:5432/alert_platform
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pipeline-worker:
+    build: .
+    command: python -u -m services.pipeline.worker
+    # pipeline-worker (в отличие от delivery-trueconf) остаётся на мостовой
+    # docker-сети — ему нужно имя "postgres". Но раздел 5 ИИ-сценарий
+    # (packages/ai/classify.py) теперь ходит в Ollama на ХОСТЕ, а
+    # 127.0.0.1 внутри моста — это сам контейнер, не хост. host-gateway
+    # (Docker 20.10+) даёт добраться до хоста, не переключая всю сеть
+    # контейнера на host (не хотим терять DNS-имя "postgres").
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://alert:alert@postgres:5432/alert_platform
+      OLLAMA_URL: http://host.docker.internal:11434
+      PIPELINE_POLL_INTERVAL_S: "1"
+      PYTHONUNBUFFERED: "1"
+      LDAP_URL: ldap://ldap:389
+      LDAP_BASE_DN: dc=gpn-dispatcher,dc=local
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ldap:
+        condition: service_started
+
+  admin-console:
+    # Платформа, Этап 1 (план — ~/.claude/plans/cheerful-mixing-pillow.md):
+    # отдельный Dockerfile с мультистейдж-сборкой React-фронтенда (web/) —
+    # только этот сервис отдаёт SPA, поэтому только он тащит node в сборку.
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    command: uvicorn services.api.main:app --host 0.0.0.0 --port 8090
+    ports: ["8090:8090"]
+    # Личный кабинет (раздел 8) теперь тоже зовёт ИИ (packages/ai/suggest_subscription.py)
+    # — та же причина, что и у pipeline-worker: 127.0.0.1 в мостовой сети означает
+    # сам контейнер, не хост, где реально слушает Ollama.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgresql+psycopg2://alert:alert@postgres:5432/alert_platform
+      OLLAMA_URL: http://host.docker.internal:11434
+      CMDB_SEED: "42"
+      LDAP_URL: ldap://ldap:389
+      LDAP_BASE_DN: dc=gpn-dispatcher,dc=local
+      SESSION_SECRET: ${SESSION_SECRET:-dispatcher-demo-secret}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ldap:
+        condition: service_started
+
+  delivery-trueconf:
+    build: .
+    command: python -u -m services.delivery_trueconf.main
+    # network_mode: host — бот и TrueConf Server теперь на одной машине;
+    # так бот стучится на 127.0.0.1:4309 (заведомо "локальный" адрес для
+    # security-зон tc_bridge, раздел 20 п.11) вместо публичного IP, и не
+    # нужно поддерживать Trusted-network-зону под адрес контейнера.
+    network_mode: host
+    environment:
+      DATABASE_URL: ${DELIVERY_DATABASE_URL:-postgresql+psycopg2://alert:alert@postgres:5432/alert_platform}
+      DELIVERY_POLL_INTERVAL_S: "5"
+      PYTHONUNBUFFERED: "1"
+      TRUECONF_SERVER: ${TRUECONF_SERVER}
+      TRUECONF_BOT_USERNAME: ${TRUECONF_BOT_USERNAME}
+      TRUECONF_BOT_PASSWORD: ${TRUECONF_BOT_PASSWORD}
+      TRUECONF_TEST_RECIPIENT: ${TRUECONF_TEST_RECIPIENT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:

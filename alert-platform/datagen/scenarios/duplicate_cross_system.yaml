@@ -1,0 +1,11 @@
+scenario: duplicate_cross_system
+description: >
+  Один факт (недоступность сетевого устройства) почти одновременно приходит
+  от Zabbix и от SolarWinds — проверка межсистемной дедупликации (раздел 4.1).
+probability_per_day: 0.8
+params:
+  jitter_seconds: [1, 8]
+expected:
+  incidents: 1
+  dedup_expected: true
+  contributing_systems: [zabbix, solarwinds]

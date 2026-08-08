@@ -1,0 +1,10 @@
+scenario: p2_disk_fill
+description: Заполнение диска с нарастанием 80 → 85 → 90 → 95%, тип REPEAT
+probability_per_day: 1.4
+params:
+  thresholds: [80, 85, 90, 95]
+  step_delay_min: [15, 45]        # интервал между шагами нарастания
+expected:
+  incidents: 1
+  message_type_after_first: REPEAT
+  preemptive_deadline: true

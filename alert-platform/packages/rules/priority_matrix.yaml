@@ -1,0 +1,26 @@
+# Раздел 7 — "Матрица — таблица в админке, а не модель". Строка —
+# technical_severity (0-5), столбец — business_impact (0-5).
+matrix:
+  - [P3, P3, P3, P2, P2, P2]
+  - [P3, P3, P2, P2, P2, P1]
+  - [P3, P2, P2, P2, P1, P1]
+  - [P2, P2, P2, P1, P1, P0]
+  - [P2, P2, P1, P1, P0, P0]
+  - [P2, P1, P1, P0, P0, P0]
+
+business_impact_by_criticality:
+  "низшая": 0
+  "низкая": 1
+  "средняя": 3
+  "высокая": 4
+  "высшая": 5
+
+modifiers:
+  repeat_threshold: 5
+  repeat_bump: 1
+  night_hours: [0, 1, 2, 3, 4, 5]
+  night_bump: 1
+  # Раздел 6.3: активное окно плановых работ должно де-эскалировать приоритет.
+  # Подключение календаря CHG — не реализовано (нет источника плановых работ),
+  # поэтому maintenance_active сейчас всегда False на вызывающей стороне.
+  maintenance_active_debump: 2

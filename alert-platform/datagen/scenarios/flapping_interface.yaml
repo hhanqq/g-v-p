@@ -1,0 +1,10 @@
+scenario: flapping_interface
+description: Нестабильный интерфейс — множественные переключения за короткое окно
+probability_per_day: 0.7
+params:
+  toggle_count: [30, 45]
+  window_minutes: 10
+expected:
+  incidents: 1
+  status_after_threshold: FLAPPING
+  single_message_with_counter: true

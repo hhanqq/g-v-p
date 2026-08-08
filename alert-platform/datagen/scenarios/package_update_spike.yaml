@@ -1,0 +1,10 @@
+scenario: package_update_spike
+description: Всплеск алертов на объектах, где вчера обновлён пакет (ось "версия ПО")
+probability_per_day: 0.5
+params:
+  affected_share: [0.3, 0.6]      # доля объектов с пакетом "updated_yesterday" из свободных
+  min_affected: 4
+  spike_window_min: 20
+expected:
+  incidents: 1
+  correlation_axis: software_version

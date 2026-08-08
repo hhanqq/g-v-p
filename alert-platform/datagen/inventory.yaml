@@ -1,0 +1,98 @@
+# Модель инфраструктуры пилота — раздел 18.2 спецификации.
+# Это ДЕКЛАРАТИВНОЕ описание: конкретные объекты (сервера, коммутаторы,
+# контроллеры) разворачиваются из этих правил детерминированно по --seed
+# в inventory_builder.py. Компания, филиалы и вся инфраструктура —
+# полностью синтетические (раздел 18.8), реальные данные ПАО «Газпромнефть»
+# не использовались и не запрашивались.
+
+company: "ПАО «Газпромнефть» (синтетический полигон демонстрации)"
+business_block: "Блок разведки и добычи"
+
+subsidiaries:
+  - code: gpn-noyabrsk
+    name: "Газпромнефть-Ноябрьскнефтегаз"
+  - code: gpn-khantos
+    name: "Газпромнефть-Хантос"
+  - code: gpn-zapolyarye
+    name: "Газпромнефть-Заполярье"
+  - code: gpn-sakhalin
+    name: "Газпромнефть-Сахалин"
+
+# Совместное владение: часть объектов принадлежит двум ДО одновременно,
+# часть — ни одному (проверка карантина, раздел 4.2 и 18.2 п.3).
+ownership:
+  dual_owner_share: 0.10
+  orphan_owner_share: 0.05
+
+sites:
+  - code: brd-noyabrsk
+    name: "БРД-Ноябрьск"
+    subsidiary: gpn-noyabrsk
+    timezone: "Asia/Yekaterinburg"
+    site_octet: 42
+  - code: brd-khantos
+    name: "БРД-Хантос"
+    subsidiary: gpn-khantos
+    timezone: "Asia/Yekaterinburg"
+    site_octet: 55
+  - code: brd-zapolyarye
+    name: "БРД-Заполярье"
+    subsidiary: gpn-zapolyarye
+    timezone: "Asia/Yekaterinburg"
+    site_octet: 68
+  - code: brd-sakhalin
+    name: "БРД-Сахалин"
+    subsidiary: gpn-sakhalin
+    timezone: "Asia/Sakhalin"
+    site_octet: 81
+
+subnets:
+  per_site: {min: 3, max: 4}
+  cidr_template: "10.{site_octet}.{subnet_index}.0/24"
+  purposes: ["АСУ ТП кустов", "серверный сегмент", "офисная сеть", "технологический сегмент"]
+
+network:
+  core_switches_per_site: 1
+  access_switches_per_site: {min: 6, max: 8}
+  naming: "sw-{site_code}-{role_short}-{seq:02d}"   # role_short: core | acc
+  # Топология связна намеренно (раздел 18.2 п.1): каждый access-switch
+  # подключён к core-switch площадки, у площадки есть канал и питание.
+
+servers:
+  per_site: {min: 15, max: 20}
+  # Короткие имена конфликтуют намеренно между площадками (раздел 18.2 п.2).
+  name_pool: [app, db, dc, mon, file, auth, gis, scada-gw, hist, web, ftp, backup]
+  os_pool: ["Windows Server 2019", "Windows Server 2022", "Ubuntu 22.04", "Astra Linux SE 1.7"]
+  components_per_object: {min: 3, max: 6}
+  component_pool: ["C:", "D:", "eth0", "eth1", "nginx", "postgres", "MSSQLSERVER", "print-spooler"]
+
+drilling:
+  # Кусты и буровые установки, привязанные к контроллерам АСУ ТП.
+  rigs_per_site: {min: 2, max: 4}
+  controllers_per_rig: {min: 3, max: 5}
+  controller_naming: "well{rig_seq}-plc-{seq:02d}"
+  components: ["PLC", "VFD-насос", "sensor-давление", "sensor-температура"]
+
+services:
+  count: 12
+  criticality_levels: ["низшая", "низкая", "средняя", "высокая", "высшая"]
+  objects_per_service: {min: 2, max: 6}
+  name_pool:
+    - "АСУ ТП куста"
+    - "Телеметрия буровой"
+    - "Диспетчеризация добычи"
+    - "Учёт нефтепродукта"
+    - "Каталог AD/LDAP"
+    - "Файловый архив ГРР"
+    - "Видеонаблюдение периметра"
+    - "SCADA насосной станции"
+
+identifier_gaps:
+  # 15–20% объектов без FQDN или инвентарного номера — нагрузка на резолвер.
+  missing_fqdn_or_inventory_share: 0.18
+  ip_changed_recently_share: 0.08
+
+software:
+  package_pool: ["scada-agent", "zabbix-agent2", "net-snmp", "app-runtime", "plc-firmware"]
+  updated_yesterday_share: 0.15
+  updated_month_ago_share: 0.55

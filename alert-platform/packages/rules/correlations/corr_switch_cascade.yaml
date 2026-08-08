@@ -1,0 +1,11 @@
+# Раздел 6.4 — рабочий пример из спецификации (corr-114), перенесённый
+# буквально: недоступность хостов за коммутатором доступа.
+rule_id: corr-114
+name: Недоступность хостов за коммутатором доступа
+trigger_symptom: host_unreachable
+cause_symptom: node_down
+match_axes: [subnet, site, topology]
+window_s: 120
+status: active
+author: seed_demo
+created_from: null

@@ -1,0 +1,11 @@
+scenario: p0_rig_power_loss
+description: Остановка буровой установки — потеря питания на всех контроллерах куста (P0)
+probability_per_day: 0.6
+params:
+  controller_delay: [0, 5]       # контроллеры куста падают почти одновременно
+  resolution_delay_min: [15, 90]
+expected:
+  incidents: 1
+  root_symptom_class: power_lost
+  priority: P0
+  delivery: immediate

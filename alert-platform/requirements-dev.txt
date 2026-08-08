@@ -1,0 +1,2 @@
+-r datagen/requirements.txt
+pytest>=7.4

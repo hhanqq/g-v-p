@@ -1,0 +1,11 @@
+scenario: maintenance_window
+description: Алерты в окне плановых работ — должны быть помечены как ожидаемые, а не подавлены
+probability_per_day: 0.6
+params:
+  window_duration_min: [30, 90]
+  alert_count: [1, 3]
+expected:
+  incidents: 0
+  routed_to: work_executor
+  suppressed: false
+  tagged_expected: true

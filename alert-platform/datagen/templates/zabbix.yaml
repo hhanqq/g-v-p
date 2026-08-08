@@ -1,0 +1,71 @@
+# Формат Zabbix — раздел 18.3. Время: 24-часовое с точками.
+# Уровни важности — фактические уровни Zabbix.
+system: zabbix
+time_format: "%Y.%m.%d %H:%M:%S"
+severity_levels: [Not classified, Information, Warning, Average, High, Disaster]
+severity_map:            # technical_severity (0-5), раздел 7
+  Not classified: 0
+  Information: 1
+  Warning: 2
+  Average: 3
+  High: 4
+  Disaster: 5
+
+templates:
+  host_unreachable:
+    firing: |
+      PROBLEM: {trigger_name}
+      Host: {host} ({ip})
+      Trigger: {trigger_name}
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+      Item value: ICMP ping = 0
+    resolved: |
+      RESOLVED: {trigger_name}
+      Host: {host} ({ip})
+      Trigger: {trigger_name}
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+      Duration: {duration}
+
+  disk_space:
+    firing: |
+      PROBLEM: Free disk space is less than {threshold}% on volume {component}
+      Host: {host} ({ip})
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+      Item value: {value}%
+    resolved: |
+      RESOLVED: Free disk space is less than {threshold}% on volume {component}
+      Host: {host} ({ip})
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+
+  service_down:
+    firing: |
+      PROBLEM: Service {component} is not running
+      Host: {host} ({ip})
+      Trigger: Service {component} state
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+    resolved: |
+      RESOLVED: Service {component} is not running
+      Host: {host} ({ip})
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+      Duration: {duration}
+
+  power_lost:
+    firing: |
+      PROBLEM: Input power lost on {component}
+      Host: {host} ({ip})
+      Trigger: UPS input power
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+      Item value: Input voltage = 0V
+    resolved: |
+      RESOLVED: Input power lost on {component}
+      Host: {host} ({ip})
+      Severity: {severity}
+      Time: {ts:%Y.%m.%d %H:%M:%S}
+      Duration: {duration}

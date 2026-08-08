@@ -1,0 +1,28 @@
+# Паспорт источников — раздел 11.2/4.3. Площадка не извлекается из текста
+# алерта (там её нет), а берётся из регистрации инстанса источника.
+# Соответствует site_instance из datagen/generate.py.
+sources:
+  - instance: zbx-brd-noyabrsk-01
+    system: zabbix
+    site: brd-noyabrsk
+  - instance: zbx-brd-khantos-01
+    system: zabbix
+    site: brd-khantos
+  - instance: zbx-brd-zapolyarye-01
+    system: zabbix
+    site: brd-zapolyarye
+  - instance: zbx-brd-sakhalin-01
+    system: zabbix
+    site: brd-sakhalin
+  - instance: sw-mon-brd-noyabrsk-01
+    system: solarwinds
+    site: brd-noyabrsk
+  - instance: sw-mon-brd-khantos-01
+    system: solarwinds
+    site: brd-khantos
+  - instance: sw-mon-brd-zapolyarye-01
+    system: solarwinds
+    site: brd-zapolyarye
+  - instance: sw-mon-brd-sakhalin-01
+    system: solarwinds
+    site: brd-sakhalin

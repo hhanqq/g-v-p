@@ -1,0 +1,35 @@
+# Парсер SolarWinds — раздел 5, стадия 1. Раздельные действия trigger/reset.
+source_system: solarwinds
+version: 1
+description: "SolarWinds NPM: Alert (trigger) / Reset"
+
+state_map:
+  "Alert": firing
+  "Reset": resolved
+
+severity_map:
+  "Informational": 1
+  "Warning": 2
+  "Critical": 4
+  "Serious": 5
+
+time_format: "%m/%d/%Y %I:%M:%S %p"
+
+fields:
+  state_prefix: '(?m)^(Alert|Reset):'
+  title: '(?m)^(?:Alert|Reset):\s*(.+)$'
+  node_raw: '(?m)^Node:\s*([^\s(]+)'
+  ip_raw: '(?m)^Node:\s*[^\s(]+\s*\(([\d.]+)\)'
+  severity_raw: '(?m)^Severity:\s*(.+)$'
+  time_raw: '(?m)^Triggered:\s*(.+)$'
+  duration_raw: '(?m)^Duration:\s*(.+)$'
+
+required_fields: [state_prefix, title, node_raw, time_raw]
+# Severity отсутствует у части Reset-сообщений — не обязателен (раздел 18.3 п.5).
+
+symptom_rules:
+  - match: '^Node\s+\S+\s+is\s+(Down|Up)$'
+    symptom_class: node_down
+  - match: '^Interface\s+(\S+)\s+on\s+\S+\s+is\s+(Down|Up)$'
+    symptom_class: interface_down
+    component_group: 1

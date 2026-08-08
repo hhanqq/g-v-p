@@ -1,0 +1,13 @@
+scenario: site_outage_ambiguous
+description: >
+  Отказ по всей площадке — core-switch и питание падают почти синхронно,
+  первопричина недостоверна (раздел 6.1): нельзя надёжно установить,
+  пропало ли питание из-за отказа канала или наоборот.
+probability_per_day: 0.25
+params:
+  jitter_seconds: [0, 6]          # разброс между двумя "кандидатами" в причину
+  resolution_delay_min: [20, 60]
+expected:
+  incidents: 1
+  root_symptom_class: ambiguous
+  ambiguous_candidates: [power_lost, node_down]

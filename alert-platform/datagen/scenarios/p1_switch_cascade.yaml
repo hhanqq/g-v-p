@@ -1,0 +1,13 @@
+scenario: p1_switch_cascade
+description: Отказ коммутатора доступа и каскад недоступности хостов за ним
+probability_per_day: 0.9
+params:
+  symptom_delay: [8, 45]        # секунды после root, когда хосты падают
+  symptom_count: [8, 16]
+  service_delay: [20, 90]
+  service_count: [3, 7]
+  resolution_delay_min: [12, 40]
+expected:
+  incidents: 1
+  root_symptom_class: node_down
+  suppressed_min: 10

@@ -1,0 +1,4 @@
+{"source_instance": "zbx-brd-noyabrsk-01", "raw_body": "PROBLEM: something broke\nSeverity: High\nTime: 2026.08.06 03:35:21", "expected": {"success": false}}
+{"source_instance": "zbx-brd-noyabrsk-01", "raw_body": "PROBLEM: app-01: Unavailable by ICMP ping\nHost: app-01 (10.42.2.5)\nSeverity: High", "expected": {"success": false}}
+{"source_instance": "zbx-brd-noyabrsk-01", "raw_body": "UNKNOWNSTATE: app-01: Unavailable by ICMP ping\nHost: app-01 (10.42.2.5)\nSeverity: High\nTime: 2026.08.06 03:35:21", "expected": {"success": false}}
+{"source_instance": "sw-mon-brd-khantos-01", "raw_body": "Alert: Node sw-brd-khantos-acc-01 is Down\nStatus: Down\nTriggered: 08/06/2026 05:21:33 PM", "expected": {"success": false}}

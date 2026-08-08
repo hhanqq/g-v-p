@@ -1,0 +1,40 @@
+# Формат SolarWinds — раздел 18.3. Раздельные действия trigger/reset,
+# американский 12-часовой формат времени, телеграфный стиль.
+system: solarwinds
+time_format: "%m/%d/%Y %I:%M:%S %p"
+severity_levels: [Informational, Warning, Critical, Serious]
+severity_map:
+  Informational: 1
+  Warning: 2
+  Critical: 4
+  Serious: 5
+
+templates:
+  node_down:
+    firing: |
+      Alert: Node {node} is Down
+      Node: {node} ({ip})
+      Status: Down
+      Severity: {severity}
+      Triggered: {ts:%m/%d/%Y %I:%M:%S %p}
+    resolved: |
+      Reset: Node {node} is Up
+      Node: {node} ({ip})
+      Status: Up
+      Triggered: {ts:%m/%d/%Y %I:%M:%S %p}
+      Duration: {duration}
+
+  interface_down:
+    firing: |
+      Alert: Interface {component} on {node} is Down
+      Node: {node} ({ip})
+      Interface: {component}
+      Status: Down
+      Severity: {severity}
+      Triggered: {ts:%m/%d/%Y %I:%M:%S %p}
+    resolved: |
+      Reset: Interface {component} on {node} is Up
+      Node: {node} ({ip})
+      Interface: {component}
+      Status: Up
+      Triggered: {ts:%m/%d/%Y %I:%M:%S %p}

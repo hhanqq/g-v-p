@@ -1,0 +1,8 @@
+scenario: object_outside_cmdb
+description: Алерт по объекту, отсутствующему в CMDB — должен уйти в карантин (раздел 4.3)
+probability_per_day: 0.9
+params: {}
+expected:
+  incidents: 0
+  resolver_outcome: quarantine
+  routed_to: fallback_duty_group

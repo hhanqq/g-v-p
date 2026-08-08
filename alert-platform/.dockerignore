@@ -1,0 +1,13 @@
+# web/node_modules и web/dist собираются ЗАНОВО внутри контейнера
+# (web/Dockerfile, стадия node-builder) — если не исключить их здесь,
+# локальные (macOS/ARM) артефакты попадут в контекст сборки и
+# COPY web/ ./ после `npm install` внутри Linux-контейнера перезапишет
+# уже поставленные пакеты бинарниками не под ту платформу (esbuild и
+# т.п. — нативные, platform-specific).
+web/node_modules
+web/dist
+
+__pycache__
+*.pyc
+.pytest_cache
+.git

@@ -7,8 +7,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from packages.models.db import (Base, CmdbObject, CmdbOwnership, Event, Notification, Problem, Signal,
-                                 SignalQueueEntry, SlaBreachNotice, SLARule)
+from packages.models.db import (Base, CmdbObject, CmdbOwnership, Event, Incident, IncidentProblem,
+                                 Notification, Problem, Signal, SignalQueueEntry, SlaBreachNotice, SLARule)
 from services.api import metrics
 
 T0 = datetime(2026, 8, 6, 10, 0, 0)
@@ -219,6 +219,67 @@ def test_sla_breach_stats_counts_total_and_by_priority(session):
 
 def test_sla_breach_stats_empty_db(session):
     assert metrics.sla_breach_stats(session) == {"total": 0, "by_priority": {}}
+
+
+def _problem(dedup_key, object_id, symptom_class):
+    return Problem(dedup_key=dedup_key, status="RESOLVED", symptom_class=symptom_class, object_id=object_id,
+                   opened_at=T0, last_seen_at=T0, repeat_count=1, toggle_count=0)
+
+
+def test_equipment_interactions_aggregates_caused_and_caused_by(session):
+    # sw-01 — root дважды, оба раза вызывает host_unreachable на host-01
+    for i in range(2):
+        root = _problem(f"root-{i}", "sw-01", "node_down")
+        symptom = _problem(f"sym-{i}", "host-01", "host_unreachable")
+        session.add_all([root, symptom])
+        session.flush()
+        incident = Incident(root_problem_id=root.id, opened_at=T0)
+        session.add(incident)
+        session.flush()
+        session.add_all([
+            IncidentProblem(incident_id=incident.id, problem_id=root.id, role="root"),
+            IncidentProblem(incident_id=incident.id, problem_id=symptom.id, role="symptom", rule_id="corr-1"),
+        ])
+
+    # sw-01 — symptom один раз, вызван power_lost на other-switch
+    other_root = _problem("other-root", "other-switch", "power_lost")
+    sw01_symptom = _problem("sw01-sym", "sw-01", "host_unreachable")
+    session.add_all([other_root, sw01_symptom])
+    session.flush()
+    incident2 = Incident(root_problem_id=other_root.id, opened_at=T0)
+    session.add(incident2)
+    session.flush()
+    session.add_all([
+        IncidentProblem(incident_id=incident2.id, problem_id=other_root.id, role="root"),
+        IncidentProblem(incident_id=incident2.id, problem_id=sw01_symptom.id, role="symptom", rule_id="corr-2"),
+    ])
+    session.commit()
+
+    result = metrics.equipment_interactions(session, "sw-01")
+    assert result["caused"] == [{"object_id": "host-01", "name": "host-01", "symptom_class": "host_unreachable", "count": 2}]
+    assert result["caused_by"] == [{"object_id": "other-switch", "name": "other-switch", "symptom_class": "power_lost", "count": 1}]
+
+
+def test_equipment_interactions_empty_when_object_never_in_an_incident(session):
+    assert metrics.equipment_interactions(session, "no-such-object") == {"caused": [], "caused_by": []}
+
+
+def test_equipment_interactions_resolves_cmdb_name(session):
+    session.add(CmdbObject(id="host-01", kind="server", site="brd-x", name="Насос №17"))
+    root = _problem("r1", "sw-01", "node_down")
+    symptom = _problem("s1", "host-01", "host_unreachable")
+    session.add_all([root, symptom])
+    session.flush()
+    incident = Incident(root_problem_id=root.id, opened_at=T0)
+    session.add(incident)
+    session.flush()
+    session.add_all([
+        IncidentProblem(incident_id=incident.id, problem_id=root.id, role="root"),
+        IncidentProblem(incident_id=incident.id, problem_id=symptom.id, role="symptom"),
+    ])
+    session.commit()
+    result = metrics.equipment_interactions(session, "sw-01")
+    assert result["caused"][0]["name"] == "Насос №17"
 
 
 def test_analytics_summary_bundles_everything(session):

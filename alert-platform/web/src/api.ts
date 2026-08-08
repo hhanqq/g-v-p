@@ -113,10 +113,18 @@ export interface EquipmentListItem {
   ip: string | null;
 }
 
+export interface EquipmentInteraction {
+  object_id: string;
+  name: string;
+  symptom_class: string;
+  count: number;
+}
+
 export interface EquipmentDetail extends EquipmentListItem {
   subnet: string | null;
   install_date: string | null;
   spec_json: string | null;
+  interactions: { caused: EquipmentInteraction[]; caused_by: EquipmentInteraction[] };
   related_problems: {
     id: number;
     symptom_class: string;

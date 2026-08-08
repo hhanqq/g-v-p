@@ -5,12 +5,13 @@
 таблиц: дашборд ничего не может сломать и не требует отдельной схемы."""
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta
 
 from sqlalchemy import func, select
 
-from packages.models.db import (CmdbObject, CmdbOwnership, Event, Incident, Notification, Problem,
-                                 Signal, SignalQueueEntry, SlaBreachNotice)
+from packages.models.db import (CmdbObject, CmdbOwnership, Event, Incident, IncidentProblem,
+                                 Notification, Problem, Signal, SignalQueueEntry, SlaBreachNotice)
 
 
 def queue_depth(session) -> dict[str, int]:
@@ -223,6 +224,55 @@ def ai_recent_examples(session) -> dict:
             "site": hypothesis_row.site,
         } if hypothesis_row else None,
     }
+
+
+def equipment_interactions(session, object_id: str, limit: int = 8) -> dict:
+    """Раздел «Оборудование» — граф связанных алертов, ИСТОРИЧЕСКИЙ режим:
+    не список отдельных Problem (их могут быть сотни), а агрегированная
+    частота реальных корреляций (Incident/IncidentProblem, раздел 6.4) —
+    с какими другими объектами/симптомами этот объект чаще всего
+    оказывался в одном инциденте, и в какой роли. Раздел 3.2: у инцидента
+    ровно один root, остальные участники — symptom, поэтому направление
+    "вызвал"/"вызвано" определяется однозначно по роли ЭТОГО объекта в
+    конкретном инциденте, не по роли партнёра."""
+    my_incident_ids = session.execute(
+        select(IncidentProblem.incident_id).distinct()
+        .join(Problem, Problem.id == IncidentProblem.problem_id)
+        .where(Problem.object_id == object_id)
+    ).scalars().all()
+    if not my_incident_ids:
+        return {"caused": [], "caused_by": []}
+
+    rows = session.execute(
+        select(IncidentProblem.incident_id, IncidentProblem.role, Problem.object_id, Problem.symptom_class)
+        .join(Problem, Problem.id == IncidentProblem.problem_id)
+        .where(IncidentProblem.incident_id.in_(my_incident_ids))
+    ).all()
+
+    my_role_by_incident = {
+        incident_id: role for incident_id, role, obj_id, _ in rows if obj_id == object_id
+    }
+
+    caused: Counter[tuple[str, str]] = Counter()
+    caused_by: Counter[tuple[str, str]] = Counter()
+    for incident_id, role, obj_id, symptom_class in rows:
+        if obj_id == object_id or not obj_id:
+            continue
+        my_role = my_role_by_incident.get(incident_id)
+        if my_role == "root":
+            caused[(obj_id, symptom_class)] += 1
+        elif my_role == "symptom" and role == "root":
+            caused_by[(obj_id, symptom_class)] += 1
+
+    def _resolve(counter: Counter[tuple[str, str]]) -> list[dict]:
+        items = []
+        for (obj_id, symptom_class), count in counter.most_common(limit):
+            other = session.get(CmdbObject, obj_id)
+            items.append({"object_id": obj_id, "name": other.name if other else obj_id,
+                          "symptom_class": symptom_class, "count": count})
+        return items
+
+    return {"caused": _resolve(caused), "caused_by": _resolve(caused_by)}
 
 
 def alerts_over_time(session, days: int = 14) -> list[tuple[str, int]]:

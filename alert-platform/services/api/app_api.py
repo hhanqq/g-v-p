@@ -195,6 +195,7 @@ def get_equipment(object_id: str, user: dict = Depends(session_auth.require_sess
                  "incident_id": p.incident_id, "duplicate_of_problem_id": p.duplicate_of_problem_id}
                 for p in problems
             ],
+            "interactions": metrics.equipment_interactions(session, object_id),
         }
 
 

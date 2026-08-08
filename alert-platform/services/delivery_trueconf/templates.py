@@ -105,6 +105,30 @@ def render_duplicate_note(*, duplicate_problem_id: int, original_problem_id: int
     )
 
 
+def render_daily_summary(*, date_str: str, total: int, open_count: int, resolved_count: int,
+                          by_priority: dict[str, int], top_symptoms: list[tuple[str, int]],
+                          ai_text: str | None) -> str:
+    """Ответ на команду /сводка — раздел «Использование ИИ». Факты
+    (счётчики) — из БД, вычислены до вызова; ai_text — необязательный
+    связный абзац поверх них, помечен как гипотеза (раздел 13). Если
+    алертов нет, ИИ не вызывается вообще, факты сами по себе достаточны."""
+    if total == 0:
+        return f"📋 <b>Сводка за {date_str}</b>\nСегодня вам не адресовано ни одного алерта."
+    priority_line = " · ".join(f"{p}: {n}" for p, n in sorted(by_priority.items())) or "не определён"
+    symptom_line = ", ".join(f"{s} ({n})" for s, n in top_symptoms) or "нет"
+    lines = [
+        f"📋 <b>Сводка за {date_str}</b>",
+        f"Адресовано вам: {total} · открыто сейчас: {open_count} · устранено: {resolved_count}",
+        f"Приоритеты: {priority_line}",
+        f"Частые типы: {symptom_line}",
+    ]
+    if ai_text:
+        lines.append("")
+        lines.append("<i>Сводка дня (гипотеза, сформирована ИИ):</i>")
+        lines.append(ai_text)
+    return "\n".join(lines)
+
+
 def render_scenario_notify(*, problem_id: int, incident_id: int | None, scenario_name: str,
                             object_name: str, is_escalation: bool) -> str:
     """Раздел «Сценарии», Этап 2 — уведомление по шагу линейной цепочки

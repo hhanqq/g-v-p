@@ -29,7 +29,8 @@ from __future__ import annotations
 import asyncio
 import os
 import secrets
-from datetime import datetime
+from collections import Counter
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from trueconf import Bot, Dispatcher, Router
@@ -38,6 +39,8 @@ from trueconf.types import Message
 from trueconf.utils._ssl import _build_ssl_context
 from trueconf.utils._token import _get_auth_token
 
+from packages.ai.daily_summary import build_prompt as build_daily_summary_prompt
+from packages.ai.daily_summary import summarize_day
 from packages.ai.recommend import checklist_for, recommend_remediation
 from packages.common.ack import mark_acknowledged
 from packages.common.db import engine, get_session
@@ -48,9 +51,9 @@ from packages.models.db import (Base, CmdbObject, CmdbService, CmdbServiceObject
 from packages.scenarios.engine import DECISION_TYPES, advance, matches_condition, parse_graph
 from services.delivery_trueconf.llm_summary import build_prompt, summarize_incident
 from services.delivery_trueconf.templates import (format_duration, render_closure,
-                                                    render_duplicate_note, render_new,
-                                                    render_scenario_notify, render_sla_breach,
-                                                    render_supplement)
+                                                    render_daily_summary, render_duplicate_note,
+                                                    render_new, render_scenario_notify,
+                                                    render_sla_breach, render_supplement)
 
 TRUECONF_SERVER = os.environ["TRUECONF_SERVER"]
 TRUECONF_BOT_USERNAME = os.environ["TRUECONF_BOT_USERNAME"]
@@ -88,6 +91,28 @@ def _get_or_create_subscriber_with_token(session, username: str) -> Subscriber:
     return subscriber
 
 
+def _daily_summary_facts(session, username: str, now: datetime) -> dict:
+    """Раздел «Использование ИИ» — /сводка: факты за сегодня для команды
+    бота. Problem, открытые СЕГОДНЯ (UTC), отфильтрованные через
+    resolve_recipients — то же множество, что реально получило бы NEW
+    (раздел 8), не отдельная логика маршрутизации."""
+    day_start = datetime(now.year, now.month, now.day)
+    day_end = day_start + timedelta(days=1)
+    todays_problems = session.execute(
+        select(Problem).where(Problem.opened_at >= day_start, Problem.opened_at < day_end)
+    ).scalars().all()
+    mine = [p for p in todays_problems if username in resolve_recipients(session, p)]
+    open_count = sum(1 for p in mine if p.status in ("OPEN", "FLAPPING"))
+    return {
+        "date_str": day_start.strftime("%Y-%m-%d"),
+        "total": len(mine),
+        "open_count": open_count,
+        "resolved_count": len(mine) - open_count,
+        "by_priority": dict(Counter(p.priority or "?" for p in mine)),
+        "top_symptoms": Counter(p.symptom_class for p in mine).most_common(5),
+    }
+
+
 @router.message()
 async def on_any_message(message: Message):
     if message.reply_message_id:
@@ -108,9 +133,9 @@ async def on_any_message(message: Message):
             "Бот «Диспетчер» на связи. Присылаю уведомления NEW/CLOSURE по проблемам "
             "и инцидентам.\nЧтобы настроить, какие уведомления вам приходят — команда "
             "/кабинет.\nЧтобы посмотреть текущие алерты и их последовательность — "
-            "команда /алерты.\nОтвет (reply) на NEW-уведомление засчитывается как "
-            "реакция на инцидент; полная обработка команд в ответах — отдельный этап "
-            "(раздел 9.4)."
+            "команда /алерты.\nЧтобы получить сводку алертов за сегодня — команда "
+            "/сводка.\nОтвет (reply) на NEW-уведомление засчитывается как реакция на "
+            "инцидент; полная обработка команд в ответах — отдельный этап (раздел 9.4)."
         )
     elif text in ("/кабинет", "/подписки", "/subscriptions"):
         username = message.author.id.split("@", 1)[0]
@@ -130,9 +155,28 @@ async def on_any_message(message: Message):
             f"Ваши текущие алерты и их последовательность: {link}\n"
             f"Ссылка привязана к вашему TrueConf-логину — не пересылайте её."
         )
+    elif text in ("/сводка", "/итоги", "/summary"):
+        username = message.author.id.split("@", 1)[0]
+        with get_session() as session:
+            facts = _daily_summary_facts(session, username, datetime.utcnow())
+            ai_text = None
+            if facts["total"] > 0:
+                prompt = build_daily_summary_prompt(
+                    date_str=facts["date_str"], total=facts["total"], open_count=facts["open_count"],
+                    resolved_count=facts["resolved_count"], by_priority=facts["by_priority"],
+                    top_symptoms=facts["top_symptoms"],
+                )
+                ai_text = await summarize_day(prompt)
+            text_out = render_daily_summary(
+                date_str=facts["date_str"], total=facts["total"], open_count=facts["open_count"],
+                resolved_count=facts["resolved_count"], by_priority=facts["by_priority"],
+                top_symptoms=facts["top_symptoms"], ai_text=ai_text,
+            )
+        await message.answer(text_out, parse_mode=ParseMode.HTML)
     else:
         await message.answer("Команды: /старт, /кабинет (настройка подписок), "
-                              "/алерты (текущие алерты и их последовательность)")
+                              "/алерты (текущие алерты и их последовательность), "
+                              "/сводка (сводка алертов за сегодня)")
 
 
 async def on_health_check(status: dict) -> None:

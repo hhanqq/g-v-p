@@ -3,8 +3,9 @@
 from datetime import datetime
 
 from services.delivery_trueconf.templates import (display_id, format_duration,
-                                                    render_closure, render_duplicate_note,
-                                                    render_new, render_supplement)
+                                                    render_closure, render_daily_summary,
+                                                    render_duplicate_note, render_new,
+                                                    render_supplement)
 
 
 def test_original_body_passed_verbatim():
@@ -59,6 +60,30 @@ def test_render_closure_notes_reconciliation():
     text2 = render_closure(problem_id=1, incident_id=None, resolved_at=resolved_at,
                             duration_text="26 мин", closed_by_reconciliation=False)
     assert "автоматически по таймауту" not in text2
+
+
+def test_render_daily_summary_empty_day_skips_ai_and_counts():
+    text = render_daily_summary(date_str="2026-08-08", total=0, open_count=0, resolved_count=0,
+                                 by_priority={}, top_symptoms=[], ai_text=None)
+    assert "не адресовано ни одного алерта" in text
+    assert "гипотеза" not in text
+
+
+def test_render_daily_summary_includes_facts_and_optional_ai_paragraph():
+    text = render_daily_summary(date_str="2026-08-08", total=7, open_count=2, resolved_count=5,
+                                 by_priority={"P0": 1, "P1": 3, "P2": 3},
+                                 top_symptoms=[("host_unreachable", 4), ("disk_space", 2)], ai_text=None)
+    assert "Адресовано вам: 7" in text
+    assert "открыто сейчас: 2" in text
+    assert "P0: 1" in text
+    assert "host_unreachable (4)" in text
+    assert "гипотеза" not in text  # ai_text не передан — раздел И5, абзаца просто нет
+
+    with_ai = render_daily_summary(date_str="2026-08-08", total=7, open_count=2, resolved_count=5,
+                                    by_priority={"P0": 1}, top_symptoms=[("host_unreachable", 4)],
+                                    ai_text="Сегодня преобладали отказы связи.")
+    assert "Сегодня преобладали отказы связи." in with_ai
+    assert "гипотеза" in with_ai
 
 
 def test_format_duration_units():

@@ -43,9 +43,10 @@ from packages.common import system_stats
 from packages.common.audit import log_action
 from packages.common.db import engine, get_session
 from packages.common.ingest import ingest_raw
+from packages.common.routing import resolve_recipients
 from packages.common.sources import seed_from_yaml_if_empty
-from packages.models.db import (AuditLog, Base, CmdbOwnership, CmdbService, SourceInstance,
-                                 Subscriber, Subscription)
+from packages.models.db import (AuditLog, Base, CmdbObject, CmdbOwnership, CmdbService,
+                                 IncidentProblem, Problem, SourceInstance, Subscriber, Subscription)
 from packages.ai import client as ai_client
 from packages.ai.suggest_subscription import extract_recommended_subsidiary, suggest_subscription
 from services.api import app_api, metrics
@@ -367,6 +368,81 @@ def unsubscribe(username: str, subscription_id: int, token: str | None = None) -
             session.delete(sub)
             session.commit()
     return RedirectResponse(f"../?token={token}", status_code=303)
+
+
+def _object_name(session, object_id: str | None) -> str:
+    if not object_id:
+        return "неизвестный объект"
+    obj = session.get(CmdbObject, object_id)
+    return obj.name if obj else object_id
+
+
+@app.get("/alerts/{username}/", response_class=HTMLResponse)
+async def my_current_alerts(username: str, token: str | None = None) -> str:
+    """Раздел «Сценарии»/бот — ссылка на просмотр сотрудником текущих
+    алертов и их последовательности (Этап 4). Тот же токен-доступ, что и
+    у личного кабинета (_get_authorized_subscriber) — НЕ LDAP-сессия
+    SPA: сотрудник открывает это с телефона по ссылке из чата/бота, не
+    логинится. Список — ровно то, что resolve_recipients реально отдал
+    бы этому подписчику (переиспользуем маршрутизацию раздела 8, не
+    дублируем её логику)."""
+    with get_session() as session:
+        subscriber = _get_authorized_subscriber(session, username, token)
+        open_problems = session.execute(
+            select(Problem).where(Problem.status.in_(("OPEN", "FLAPPING")))
+            .order_by(Problem.opened_at.desc())
+        ).scalars().all()
+        my_problems = [p for p in open_problems if username in resolve_recipients(session, p)]
+
+        items_html = []
+        for p in my_problems:
+            ack_html = (
+                f'<div class="descr">отреагировал: {html.escape(p.acknowledged_by or "")}, '
+                f'{p.acknowledged_at:%Y-%m-%d %H:%M:%S}</div>' if p.acknowledged_at else ""
+            )
+            sequence_html = ""
+            if p.incident_id:
+                members = session.execute(
+                    select(IncidentProblem, Problem)
+                    .join(Problem, Problem.id == IncidentProblem.problem_id)
+                    .where(IncidentProblem.incident_id == p.incident_id)
+                    .order_by(Problem.opened_at.asc())
+                ).all()
+                rows = "".join(
+                    f'<li>{"[root] " if ip.role == "root" else ""}'
+                    f'{html.escape(_object_name(session, m.object_id))} · {html.escape(m.symptom_class)} · '
+                    f'{m.opened_at:%H:%M:%S}</li>'
+                    for ip, m in members
+                )
+                sequence_html = f'<details><summary>последовательность ({len(members)})</summary><ul>{rows}</ul></details>'
+            items_html.append(
+                f'<li><b>{html.escape(p.priority or "?")}</b> · '
+                f'{html.escape(_object_name(session, p.object_id))} · {html.escape(p.symptom_class)}<br>'
+                f'<span class="descr">открыт {p.opened_at:%Y-%m-%d %H:%M:%S} · {html.escape(p.status)}</span>'
+                f'{ack_html}{sequence_html}</li>'
+            )
+        list_html = "\n".join(items_html) or '<li class="descr">Сейчас нет алертов, адресованных вам.</li>'
+
+    uname = html.escape(username)
+    return f"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8">
+<title>Диспетчер — текущие алерты {uname}</title>
+<style>
+body {{ font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }}
+ul {{ list-style: none; padding: 0; }}
+li {{ margin-bottom: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 8px; }}
+.descr {{ color: #666; font-size: 13px; }}
+details {{ margin-top: 8px; font-size: 13px; }}
+details ul {{ padding-left: 16px; list-style: disc; }}
+details li {{ border: none; padding: 2px 0; margin: 0; }}
+a {{ color: #06c; }}
+</style></head>
+<body>
+<p><a href="../../me/{uname}/?token={html.escape(token or '')}">← личный кабинет подписок</a></p>
+<h1>Текущие алерты: {uname}</h1>
+<p class="descr">Ровно то, что вам сейчас пришло бы уведомлением по вашим подпискам (раздел 8).</p>
+<ul>{list_html}</ul>
+</body></html>"""
 
 
 # --- Дашборд администратора (кейс, раздел 7 «Аналитика») --------------------

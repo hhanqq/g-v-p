@@ -107,8 +107,10 @@ async def on_any_message(message: Message):
         await message.answer(
             "Бот «Диспетчер» на связи. Присылаю уведомления NEW/CLOSURE по проблемам "
             "и инцидентам.\nЧтобы настроить, какие уведомления вам приходят — команда "
-            "/кабинет.\nОтвет (reply) на NEW-уведомление засчитывается как реакция на "
-            "инцидент; полная обработка команд в ответах — отдельный этап (раздел 9.4)."
+            "/кабинет.\nЧтобы посмотреть текущие алерты и их последовательность — "
+            "команда /алерты.\nОтвет (reply) на NEW-уведомление засчитывается как "
+            "реакция на инцидент; полная обработка команд в ответах — отдельный этап "
+            "(раздел 9.4)."
         )
     elif text in ("/кабинет", "/подписки", "/subscriptions"):
         username = message.author.id.split("@", 1)[0]
@@ -119,8 +121,18 @@ async def on_any_message(message: Message):
             f"Ваш личный кабинет подписок (раздел 8): {link}\n"
             f"Ссылка привязана к вашему TrueConf-логину — не пересылайте её."
         )
+    elif text in ("/алерты", "/текущие", "/alerts"):
+        username = message.author.id.split("@", 1)[0]
+        with get_session() as session:
+            subscriber = _get_or_create_subscriber_with_token(session, username)
+            link = f"{PUBLIC_CONSOLE_URL}/alerts/{username}/?token={subscriber.access_token}"
+        await message.answer(
+            f"Ваши текущие алерты и их последовательность: {link}\n"
+            f"Ссылка привязана к вашему TrueConf-логину — не пересылайте её."
+        )
     else:
-        await message.answer("Команды: /старт, /кабинет (настройка подписок на уведомления)")
+        await message.answer("Команды: /старт, /кабинет (настройка подписок), "
+                              "/алерты (текущие алерты и их последовательность)")
 
 
 async def on_health_check(status: dict) -> None:
@@ -155,19 +167,24 @@ def _object_display(session, object_id: str | None) -> str:
     return obj.name if obj else object_id
 
 
-async def notify_new(bot: Bot, session, problem: Problem, chat_id: str) -> None:
+async def notify_new(bot: Bot, session, problem: Problem, chat_id: str, username: str) -> None:
     notification = Notification(problem_id=problem.id, type="NEW", chat_id=chat_id,
                                  status="queued", created_at=datetime.utcnow())
     session.add(notification)
     session.commit()  # раздел 9.8 п.1 — в очереди ДО отправки
 
     original_body, source_system = _original_body_for(session, problem)
+    # Этап 4 — ссылка на «мои текущие алерты» прямо в самом уведомлении
+    # (не только по команде /алерты): переиспользуем тот же токен, что и
+    # у личного кабинета (_get_or_create_subscriber_with_token).
+    subscriber = _get_or_create_subscriber_with_token(session, username)
+    alerts_link = f"{PUBLIC_CONSOLE_URL}/alerts/{username}/?token={subscriber.access_token}"
     text = render_new(
         problem_id=problem.id, incident_id=problem.incident_id, priority=problem.priority,
         object_name=_object_display(session, problem.object_id), site_name=problem.site or "?",
         service_name=_service_name_for(session, problem.object_id),
         source_system=source_system, original_body=original_body, symptom_class=problem.symptom_class,
-        ai_root_cause_hypothesis=problem.ai_root_cause_hypothesis,
+        ai_root_cause_hypothesis=problem.ai_root_cause_hypothesis, alerts_link=alerts_link,
     )
     try:
         resp = await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.HTML)
@@ -579,7 +596,7 @@ async def delivery_tick(bot: Bot, domain: str) -> None:
                     chat_id = await get_chat_id(bot, username, domain)
                     if chat_id in already_chat_ids:
                         continue  # раздел 9.8 п.2 — идемпотентность per-получатель
-                    await notify_new(bot, session, problem, chat_id)
+                    await notify_new(bot, session, problem, chat_id, username)
                     already_chat_ids.add(chat_id)
                 except Exception as exc:  # noqa: BLE001
                     print(f"delivery_trueconf: ошибка NEW для problem={problem.id} "

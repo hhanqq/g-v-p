@@ -3,9 +3,10 @@
 шаблон.
 
 Сознательно урезано относительно раздела 9.3 для M4: строка действий
-("Ответьте: взял · не мой · следствие") и ссылки в кабинет не включены —
-раздел 9.4 (реакция на ответы) и раздел 11.1 (кабинет) ещё не реализованы,
-включать нерабочие инструкции в реальное сообщение было бы нечестно.
+("Ответьте: взял · не мой · следствие") не включена — полная семантика
+раздела 9.4 не реализована (см. packages/common/ack.py — только бинарный
+факт реакции, минимальный срез). Ссылка в личный кабинет и на текущие
+алерты (Этап 4) — реализованы, включаются в render_new ниже.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ def display_id(problem_id: int, incident_id: int | None) -> str:
 def render_new(*, problem_id: int, incident_id: int | None, priority: str | None,
                 object_name: str, site_name: str, service_name: str | None,
                 source_system: str, original_body: str, symptom_class: str,
-                ai_root_cause_hypothesis: str | None = None) -> str:
+                ai_root_cause_hypothesis: str | None = None, alerts_link: str | None = None) -> str:
     emoji = PRIORITY_EMOJI.get(priority or "P3", "⚪")
     did = display_id(problem_id, incident_id)
     service_line = f"Сервис: {service_name}" if service_name else "Сервис: не определён"
@@ -38,6 +39,11 @@ def render_new(*, problem_id: int, incident_id: int | None, priority: str | None
         # заменяет факты выше; явно маркирована как предположение.
         text += (f"\n\n<i>Вероятная первопричина (гипотеза, требует проверки, "
                  f"сформирована ИИ):</i>\n{ai_root_cause_hypothesis}")
+    if alerts_link:
+        # Этап 4 — сотрудник должен суметь одним тапом из самого алерта
+        # увидеть полную текущую картину и последовательность (не только
+        # этот один алерт), не набирая команду /алерты вручную.
+        text += f"\n\nВаши текущие алерты и последовательность: {alerts_link}"
     return text
 
 

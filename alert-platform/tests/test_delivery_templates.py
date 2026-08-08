@@ -18,6 +18,20 @@ def test_original_body_passed_verbatim():
         assert line in text
 
 
+def test_render_new_includes_alerts_link_when_provided():
+    text = render_new(problem_id=1, incident_id=None, priority="P1", object_name="x", site_name="y",
+                       service_name=None, source_system="zabbix", original_body="body",
+                       symptom_class="host_unreachable", alerts_link="https://example/alerts/u/?token=t")
+    assert "https://example/alerts/u/?token=t" in text
+
+
+def test_render_new_omits_alerts_link_when_not_provided():
+    text = render_new(problem_id=1, incident_id=None, priority="P1", object_name="x", site_name="y",
+                       service_name=None, source_system="zabbix", original_body="body",
+                       symptom_class="host_unreachable")
+    assert "текущие алерты" not in text
+
+
 def test_display_id_uses_incident_when_present():
     assert display_id(7, 42) == "INC-0042"
     assert display_id(7, None) == "PRB-0007"

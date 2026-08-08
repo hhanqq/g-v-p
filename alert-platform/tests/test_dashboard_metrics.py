@@ -7,7 +7,8 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from packages.models.db import Base, CmdbOwnership, Event, Notification, Problem, Signal, SignalQueueEntry
+from packages.models.db import (Base, CmdbObject, CmdbOwnership, Event, Notification, Problem, Signal,
+                                 SignalQueueEntry, SlaBreachNotice, SLARule)
 from services.api import metrics
 
 T0 = datetime(2026, 8, 6, 10, 0, 0)
@@ -157,6 +158,75 @@ def test_ai_recent_examples_empty_db_returns_all_none(session):
     assert examples["classification"] is None
     assert examples["duplicate"] is None
     assert examples["root_cause_hypothesis"] is None
+
+
+def test_alerts_over_time_fills_zero_days_and_counts_recent(session):
+    now = datetime.utcnow()
+    sig = Signal(source_system="zabbix", source_instance="x", received_at=now, raw_body="x", hash="h1")
+    session.add(sig)
+    session.flush()
+    session.add_all([
+        Event(signal_id=sig.id, state="firing", occurred_at=now, ingest_ts=now,
+              symptom_class="node_down", title="t"),
+        Event(signal_id=sig.id, state="firing", occurred_at=now, ingest_ts=now,
+              symptom_class="node_down", title="t"),
+        Event(signal_id=sig.id, state="firing", occurred_at=now - timedelta(days=20), ingest_ts=now,
+              symptom_class="node_down", title="слишком старое, вне окна"),
+    ])
+    session.commit()
+    series = metrics.alerts_over_time(session, days=14)
+    assert len(series) == 14
+    assert series[-1] == (now.date().isoformat(), 2)
+    assert sum(count for _, count in series) == 2  # старое событие за окном не попало
+
+
+def test_top_problem_objects_orders_by_count_and_joins_cmdb_name(session):
+    session.add(CmdbObject(id="rig-01", kind="controller", site="brd-noyabrsk", name="Насос №17"))
+    for i in range(3):
+        session.add(Problem(dedup_key=f"a-{i}", status="OPEN", symptom_class="node_down",
+                             object_id="rig-01", opened_at=T0, last_seen_at=T0,
+                             repeat_count=1, toggle_count=0))
+    session.add(Problem(dedup_key="b-0", status="OPEN", symptom_class="node_down",
+                         object_id="no-card-01", opened_at=T0, last_seen_at=T0,
+                         repeat_count=1, toggle_count=0))
+    session.commit()
+    top = metrics.top_problem_objects(session)
+    assert top[0]["object_id"] == "rig-01"
+    assert top[0]["count"] == 3
+    assert top[0]["name"] == "Насос №17"
+    assert top[1]["name"] == "no-card-01"  # раздел 4.2 — нет карточки, показываем как есть
+
+
+def test_sla_breach_stats_counts_total_and_by_priority(session):
+    session.add(SLARule(name="P0 быстро", priority="P0", response_minutes=15,
+                         resolution_minutes=120, created_at=T0))
+    session.flush()
+    p0 = Problem(dedup_key="a", status="OPEN", symptom_class="node_down", priority="P0",
+                 opened_at=T0, last_seen_at=T0, repeat_count=1, toggle_count=0)
+    p1 = Problem(dedup_key="b", status="OPEN", symptom_class="node_down", priority="P1",
+                 opened_at=T0, last_seen_at=T0, repeat_count=1, toggle_count=0)
+    session.add_all([p0, p1])
+    session.flush()
+    session.add_all([
+        SlaBreachNotice(problem_id=p0.id, sla_rule_id=1, created_at=T0),
+        SlaBreachNotice(problem_id=p1.id, sla_rule_id=1, created_at=T0),
+    ])
+    session.commit()
+    stats = metrics.sla_breach_stats(session)
+    assert stats["total"] == 2
+    assert stats["by_priority"] == {"P0": 1, "P1": 1}
+
+
+def test_sla_breach_stats_empty_db(session):
+    assert metrics.sla_breach_stats(session) == {"total": 0, "by_priority": {}}
+
+
+def test_analytics_summary_bundles_everything(session):
+    summary = metrics.analytics_summary(session)
+    assert "alerts_over_time" in summary
+    assert "top_problem_objects" in summary
+    assert "sla_breach" in summary
+    assert summary["sla_breach"]["total"] == 0
 
 
 def test_ai_recent_examples_picks_latest_and_joins_original(session):

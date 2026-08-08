@@ -5,9 +5,12 @@
 таблиц: дашборд ничего не может сломать и не требует отдельной схемы."""
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from sqlalchemy import func, select
 
-from packages.models.db import CmdbOwnership, Event, Incident, Notification, Problem, Signal, SignalQueueEntry
+from packages.models.db import (CmdbObject, CmdbOwnership, Event, Incident, Notification, Problem,
+                                 Signal, SignalQueueEntry, SlaBreachNotice)
 
 
 def queue_depth(session) -> dict[str, int]:
@@ -219,6 +222,81 @@ def ai_recent_examples(session) -> dict:
             "text": hypothesis_row.ai_root_cause_hypothesis, "problem_id": hypothesis_row.id,
             "site": hypothesis_row.site,
         } if hypothesis_row else None,
+    }
+
+
+def alerts_over_time(session, days: int = 14) -> list[tuple[str, int]]:
+    """Раздел «Аналитика», Этап 4 — количество событий (`Event.occurred_at`)
+    по дням за последние `days` дней. Дни без событий дозаполняются
+    нулями в Python, а не через generate_series в SQL — переносимость
+    между SQLite (тесты) и Postgres (прод) проще, а график на фронтенде
+    не должен «прыгать» из-за пропущенных дат."""
+    since = datetime.utcnow() - timedelta(days=days - 1)
+    rows = session.execute(
+        select(func.date(Event.occurred_at), func.count())
+        .where(Event.occurred_at >= since)
+        .group_by(func.date(Event.occurred_at))
+    ).all()
+    counts = {str(day): count for day, count in rows}
+    today = datetime.utcnow().date()
+    return [
+        ((today - timedelta(days=i)).isoformat(), counts.get((today - timedelta(days=i)).isoformat(), 0))
+        for i in range(days - 1, -1, -1)
+    ]
+
+
+def top_problem_objects(session, limit: int = 8) -> list[dict]:
+    """Раздел «Аналитика», Этап 4 — самые проблемные объекты по
+    количеству Problem, с человекочитаемым именем/площадкой из
+    CmdbObject (объект без карточки CmdbObject — раздел 4.2, не ошибка,
+    просто выводится под собственным object_id)."""
+    rows = session.execute(
+        select(Problem.object_id, func.count())
+        .where(Problem.object_id.is_not(None))
+        .group_by(Problem.object_id)
+        .order_by(func.count().desc())
+        .limit(limit)
+    ).all()
+    result = []
+    for object_id, count in rows:
+        obj = session.get(CmdbObject, object_id)
+        result.append({
+            "object_id": object_id, "count": count,
+            "name": obj.name if obj else object_id,
+            "site": obj.site if obj else None,
+            "equipment_type": obj.equipment_type if obj else None,
+        })
+    return result
+
+
+def sla_breach_stats(session) -> dict:
+    """Раздел «SLA»/«Аналитика», Этап 4 — сколько раз реально сработало
+    напоминание о нарушении (SlaBreachNotice — одно на жизненный цикл
+    проблемы, см. run_sla_breaches), с разбивкой по приоритету
+    нарушенной проблемы."""
+    total = session.execute(select(func.count(SlaBreachNotice.id))).scalar_one()
+    rows = session.execute(
+        select(Problem.priority, func.count())
+        .select_from(SlaBreachNotice)
+        .join(Problem, Problem.id == SlaBreachNotice.problem_id)
+        .group_by(Problem.priority)
+    ).all()
+    return {"total": total, "by_priority": {priority or "?": count for priority, count in rows}}
+
+
+def analytics_summary(session) -> dict:
+    """Всё для страницы «Аналитика» (Этап 4) — историческая часть,
+    отдельно от dashboard_snapshot (Главная показывает состояние ПРЯМО
+    СЕЙЧАС, Аналитика — историю за период)."""
+    return {
+        "alerts_over_time": alerts_over_time(session),
+        "top_problem_objects": top_problem_objects(session),
+        "top_symptoms": top_symptom_classes(session),
+        "priority_distribution": priority_distribution(session),
+        "sla_breach": sla_breach_stats(session),
+        "avg_mttr_seconds": average_mttr_seconds(session),
+        "resolution_coverage_pct": resolution_coverage(session),
+        "incidents": incidents_summary(session),
     }
 
 

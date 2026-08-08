@@ -61,6 +61,14 @@ def home_summary(user: dict = Depends(session_auth.require_session_user)) -> dic
         return metrics.dashboard_snapshot(session)
 
 
+# --- Аналитика (историческая, раздел 7, Этап 4) -------------------------------
+
+@router.get("/analytics/summary")
+def analytics_summary(user: dict = Depends(session_auth.require_session_user)) -> dict:
+    with get_session() as session:
+        return metrics.analytics_summary(session)
+
+
 # --- Инциденты -----------------------------------------------------------------
 
 @router.get("/incidents")

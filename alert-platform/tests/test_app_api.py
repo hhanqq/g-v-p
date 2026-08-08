@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 import services.api.main as main_module  # noqa: E402
 from packages.common.db import get_session  # noqa: E402
-from packages.models.db import CmdbObject, Subscriber  # noqa: E402
+from packages.models.db import CmdbObject, Problem, Subscriber, Subscription  # noqa: E402
 
 client = TestClient(main_module.app)
 
@@ -116,6 +116,16 @@ def test_employees_list_shows_availability_and_can_set_it():
     assert detail.json()["availability_history"][0]["source"] == "manual"
 
 
+def test_analytics_summary_returns_bundled_stats():
+    _login()
+    resp = client.get("/api/analytics/summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "alerts_over_time" in body
+    assert "top_problem_objects" in body
+    assert "sla_breach" in body
+
+
 def test_incidents_and_alerts_endpoints_smoke():
     _login()
     assert client.get("/api/incidents").status_code == 200
@@ -191,6 +201,26 @@ def test_scenario_update_deactivates_active_scenario_on_graph_change():
 def test_scenario_get_404_for_unknown_id():
     _login()
     assert client.get("/api/scenarios/999999").status_code == 404
+
+
+def test_my_current_alerts_page_shows_only_routed_problems():
+    with get_session() as session:
+        sub = Subscriber(trueconf_username="alerts_viewer", access_token="tok-alerts-viewer",
+                          created_at=datetime.utcnow())
+        session.add(sub)
+        session.flush()
+        session.add(Subscription(subscriber_id=sub.id, created_at=datetime.utcnow()))  # catch-all
+        session.add(Problem(dedup_key="my-alert-1", status="OPEN", symptom_class="node_down",
+                             opened_at=datetime.utcnow(), last_seen_at=datetime.utcnow(),
+                             repeat_count=1, toggle_count=0, priority="P1"))
+        session.commit()
+
+    forbidden = client.get("/alerts/alerts_viewer/", params={"token": "wrong"})
+    assert forbidden.status_code == 403
+
+    ok = client.get("/alerts/alerts_viewer/", params={"token": "tok-alerts-viewer"})
+    assert ok.status_code == 200
+    assert "node_down" in ok.text
 
 
 def test_sla_rule_create_and_list():

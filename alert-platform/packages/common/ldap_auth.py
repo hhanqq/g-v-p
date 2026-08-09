@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 
 from ldap3 import Connection, Server
+from ldap3.utils.conv import escape_filter_chars
 
 LDAP_URL = os.environ.get("LDAP_URL", "ldap://ldap:389")
 LDAP_BASE_DN = os.environ.get("LDAP_BASE_DN", "dc=gpn-dispatcher,dc=local")
@@ -52,7 +53,10 @@ def _find_user(username: str) -> tuple[str, list[str]] | None:
     conn = _service_connection()
     if conn is None:
         return None
-    conn.search(f"ou=users,{LDAP_BASE_DN}", f"(&(objectClass=posixAccount)(uid={username}))",
+    # Экранирование обязательно: username приходит из формы логина, без
+    # него можно было бы манипулировать фильтром (LDAP-инъекция), как уже
+    # учтено на стороне Go (ldap.EscapeFilter, go-platform/internal/adminapi/auth.go).
+    conn.search(f"ou=users,{LDAP_BASE_DN}", f"(&(objectClass=posixAccount)(uid={escape_filter_chars(username)}))",
                 attributes=["memberOf"])
     if not conn.entries:
         return None

@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -97,13 +98,60 @@ type SessionManager struct {
 	lifetime      time.Duration
 	secureCookie  bool
 	now           func() time.Time
+	limiter       *loginLimiter
 }
 
 func NewSessionManager(authenticator Authenticator, secret string, secureCookie bool) *SessionManager {
 	return &SessionManager{
 		authenticator: authenticator, secret: []byte(secret), lifetime: 14 * 24 * time.Hour,
 		secureCookie: secureCookie, now: func() time.Time { return time.Now().UTC() },
+		limiter: newLoginLimiter(),
 	}
+}
+
+// loginLimiter — защита от подбора пароля: не более loginMaxAttempts
+// неудачных попыток на один логин за loginWindow. В памяти процесса —
+// осознанное упрощение для демо-стенда (один процесс admin-api, не
+// кластер); для продакшена на несколько реплик счётчик стоит перенести
+// в общее хранилище (Postgres/Redis), сама защита должна остаться.
+type loginLimiter struct {
+	mu       sync.Mutex
+	attempts map[string][]time.Time
+}
+
+const (
+	loginMaxAttempts = 5
+	loginWindow      = 5 * time.Minute
+)
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{attempts: make(map[string][]time.Time)}
+}
+
+func (limiter *loginLimiter) allow(username string, now time.Time) bool {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	cutoff := now.Add(-loginWindow)
+	kept := limiter.attempts[username][:0]
+	for _, attempt := range limiter.attempts[username] {
+		if attempt.After(cutoff) {
+			kept = append(kept, attempt)
+		}
+	}
+	limiter.attempts[username] = kept
+	return len(kept) < loginMaxAttempts
+}
+
+func (limiter *loginLimiter) recordFailure(username string, now time.Time) {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	limiter.attempts[username] = append(limiter.attempts[username], now)
+}
+
+func (limiter *loginLimiter) recordSuccess(username string) {
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	delete(limiter.attempts, username)
 }
 
 func (manager *SessionManager) login(response http.ResponseWriter, request *http.Request, server *Server) {
@@ -117,12 +165,20 @@ func (manager *SessionManager) login(response http.ResponseWriter, request *http
 		writeError(response, http.StatusUnprocessableEntity, "invalid login payload")
 		return
 	}
+	now := manager.now()
+	if !manager.limiter.allow(payload.Username, now) {
+		server.auditLoginFailure(request.Context(), payload.Username)
+		writeError(response, http.StatusTooManyRequests, "Слишком много неудачных попыток входа, попробуйте позже")
+		return
+	}
 	authenticated, isAdmin := manager.authenticator.Authenticate(request.Context(), payload.Username, payload.Password)
 	if !authenticated {
+		manager.limiter.recordFailure(payload.Username, now)
 		server.auditLoginFailure(request.Context(), payload.Username)
 		writeError(response, http.StatusUnauthorized, "Неверный логин или пароль LDAP")
 		return
 	}
+	manager.limiter.recordSuccess(payload.Username)
 	expires := manager.now().Add(manager.lifetime)
 	value, err := manager.sign(sessionPayload{Username: payload.Username, IsAdmin: isAdmin, Expires: expires.Unix()})
 	if err != nil {

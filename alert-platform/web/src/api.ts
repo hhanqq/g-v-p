@@ -252,6 +252,7 @@ export interface SourceItem {
   instance: string;
   system: string;
   site: string;
+  api_token: string | null;
   created_at: string;
 }
 

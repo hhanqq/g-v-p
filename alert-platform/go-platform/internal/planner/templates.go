@@ -2,9 +2,21 @@ package planner
 
 import (
 	"fmt"
+	"html"
 	"strings"
 	"time"
 )
+
+// esc экранирует динамический текст (сырое тело алерта от источника
+// мониторинга, вывод ИИ, имена объектов/сценариев/правил) перед
+// вставкой в HTML-размеченное сообщение TrueConf (parse_mode: HTML).
+// Не применяется к литеральной разметке (<b>/<i>), которую пишет сам
+// шаблон — только к значениям из данных. Без этого скомпрометированный
+// или ошибочно настроенный источник мониторинга мог бы протащить
+// произвольную HTML-разметку в исходящее сообщение через текст алерта.
+func esc(value string) string {
+	return html.EscapeString(value)
+}
 
 var priorityEmoji = map[string]string{
 	"P0": "🔴",
@@ -28,17 +40,17 @@ func RenderNew(data ProblemData) string {
 	}
 	serviceLine := "Сервис: не определён"
 	if data.ServiceName != nil {
-		serviceLine = "Сервис: " + *data.ServiceName
+		serviceLine = "Сервис: " + esc(*data.ServiceName)
 	}
 	text := fmt.Sprintf(
 		"%s <b>%s · %s</b> · %s · %s\n─────── оригинал %s ───────\n%s\n───────────────────────────────\n%s · Симптом: %s",
-		emoji, priority, DisplayID(data.ID, data.IncidentID), data.ObjectName,
-		valueOr(data.Site, "?"), data.SourceSystem, data.OriginalBody,
-		serviceLine, data.SymptomClass,
+		emoji, priority, DisplayID(data.ID, data.IncidentID), esc(data.ObjectName),
+		esc(valueOr(data.Site, "?")), esc(data.SourceSystem), esc(data.OriginalBody),
+		serviceLine, esc(data.SymptomClass),
 	)
 	if data.AIRootCauseHypothesis != nil && *data.AIRootCauseHypothesis != "" {
 		text += "\n\n<i>Вероятная первопричина (гипотеза, требует проверки, сформирована ИИ):</i>\n" +
-			*data.AIRootCauseHypothesis
+			esc(*data.AIRootCauseHypothesis)
 	}
 	return text
 }
@@ -59,7 +71,7 @@ func RenderClosure(data ProblemData) string {
 func RenderDuplicate(duplicateProblemID, originalProblemID int64, incidentID *int64, source string) string {
 	return fmt.Sprintf(
 		"🔗 <b>ДУБЛЬ</b> · PRB-%04d\nПохоже на то же событие, что и %s — подтверждение от %s (определено ИИ, раздел 4.1). Отдельное уведомление не отправлено.",
-		duplicateProblemID, DisplayID(originalProblemID, incidentID), source,
+		duplicateProblemID, DisplayID(originalProblemID, incidentID), esc(source),
 	)
 }
 
@@ -68,11 +80,11 @@ func RenderScenario(problem ProblemData, scenarioName string, escalation bool) s
 	if escalation {
 		action = "Эскалация"
 	}
-	return fmt.Sprintf("🧩 <b>%s · %s</b>\nСценарий: %s\nОбъект: %s · Приоритет: %s", action, DisplayID(problem.ID, problem.IncidentID), scenarioName, problem.ObjectName, valueOr(problem.Priority, "?"))
+	return fmt.Sprintf("🧩 <b>%s · %s</b>\nСценарий: %s\nОбъект: %s · Приоритет: %s", action, DisplayID(problem.ID, problem.IncidentID), esc(scenarioName), esc(problem.ObjectName), valueOr(problem.Priority, "?"))
 }
 
 func RenderSLABreach(problem ProblemData, ruleName string, ageMinutes, thresholdMinutes int) string {
-	return fmt.Sprintf("⏱ <b>НАРУШЕНИЕ SLA · %s</b>\nОбъект: %s · Приоритет: %s\nНет реакции %d мин (порог %d мин) · правило %s", DisplayID(problem.ID, problem.IncidentID), problem.ObjectName, valueOr(problem.Priority, "?"), ageMinutes, thresholdMinutes, ruleName)
+	return fmt.Sprintf("⏱ <b>НАРУШЕНИЕ SLA · %s</b>\nОбъект: %s · Приоритет: %s\nНет реакции %d мин (порог %d мин) · правило %s", DisplayID(problem.ID, problem.IncidentID), esc(problem.ObjectName), valueOr(problem.Priority, "?"), ageMinutes, thresholdMinutes, esc(ruleName))
 }
 
 type SupplementData struct {
@@ -92,23 +104,23 @@ type SupplementData struct {
 func RenderSupplement(data SupplementData) string {
 	rules := "не определено"
 	if len(data.RuleNames) > 0 {
-		rules = strings.Join(data.RuleNames, ", ")
+		rules = esc(strings.Join(data.RuleNames, ", "))
 	}
 	lines := []string{
 		fmt.Sprintf("🔵 <b>ДОПОЛНЕНИЕ к %s</b>", DisplayID(data.ProblemID, &data.IncidentID)),
-		fmt.Sprintf("Первопричина: %s (%s), с %s", data.RootObject, data.RootSymptom, data.OpenedAt.Format("2006-01-02 15:04:05")),
+		fmt.Sprintf("Первопричина: %s (%s), с %s", esc(data.RootObject), esc(data.RootSymptom), data.OpenedAt.Format("2006-01-02 15:04:05")),
 		fmt.Sprintf("Связано алертов: %d · Затронуто сервисов: %d", data.SymptomsCount, data.ServicesCount),
 		fmt.Sprintf("Основание: правило %s", rules),
 	}
 	if data.AISummary != nil && *data.AISummary != "" {
-		lines = append(lines, "", "<i>Сводка (гипотеза, сформирована ИИ):</i>", *data.AISummary)
+		lines = append(lines, "", "<i>Сводка (гипотеза, сформирована ИИ):</i>", esc(*data.AISummary))
 	}
 	if data.AIRecommendation != nil && *data.AIRecommendation != "" {
-		lines = append(lines, "", "<i>Рекомендация (на основе базы знаний, сформулирована ИИ):</i>", *data.AIRecommendation)
+		lines = append(lines, "", "<i>Рекомендация (на основе базы знаний, сформулирована ИИ):</i>", esc(*data.AIRecommendation))
 	} else if len(data.Checklist) > 0 {
 		lines = append(lines, "", "<i>Рекомендация (чек-лист из базы знаний):</i>")
 		for _, step := range data.Checklist {
-			lines = append(lines, "• "+step)
+			lines = append(lines, "• "+esc(step))
 		}
 	}
 	return strings.Join(lines, "\n")
@@ -129,7 +141,7 @@ func RenderAIAnalysis(data AIAnalysisData) string {
 	lines := []string{
 		fmt.Sprintf("🧠 <b>РАЗБОР ПО ЗАПРОСУ · %s</b>", DisplayID(data.ProblemID, data.IncidentID)),
 		fmt.Sprintf("Объект: %s · Симптом: %s · Площадка: %s · Приоритет: %s",
-			data.ObjectName, data.SymptomClass, valueOr(data.Site, "?"), valueOr(data.Priority, "?")),
+			esc(data.ObjectName), esc(data.SymptomClass), esc(valueOr(data.Site, "?")), valueOr(data.Priority, "?")),
 	}
 	if data.IncidentID != nil {
 		lines = append(lines, fmt.Sprintf("Связанных алертов в инциденте: %d", data.RelatedCount))
@@ -137,7 +149,7 @@ func RenderAIAnalysis(data AIAnalysisData) string {
 		lines = append(lines, "Инцидент не сформирован — разбор по одиночному алерту")
 	}
 	if data.AIText != nil && *data.AIText != "" {
-		lines = append(lines, "", "<i>Разбор (гипотеза, требует проверки, сформирована ИИ):</i>", *data.AIText)
+		lines = append(lines, "", "<i>Разбор (гипотеза, требует проверки, сформирована ИИ):</i>", esc(*data.AIText))
 	} else {
 		lines = append(lines, "", "ИИ временно недоступна — попробуйте попросить разбор ещё раз чуть позже.")
 	}

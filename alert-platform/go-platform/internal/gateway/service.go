@@ -30,6 +30,11 @@ type Health struct {
 
 type Store interface {
 	Ingest(context.Context, IngestRequest, string, time.Time) (IngestResult, error)
+	// SourceToken возвращает зарегистрированный api_token для инстанса
+	// источника, если он задан, иначе nil. Незарегистрированный инстанс
+	// или инстанс без токена (NULL) — тоже nil, обратная совместимость
+	// с источниками, зарегистрированными до появления этой проверки.
+	SourceToken(context.Context, string) (*string, error)
 	Health(context.Context) (int64, error)
 	Close()
 }

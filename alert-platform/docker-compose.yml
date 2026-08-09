@@ -8,7 +8,10 @@ services:
     image: glauth/glauth:latest
     volumes:
       - ./ldap/glauth.cfg:/app/config/config.cfg:ro
-    ports: ["3893:389"]
+    # Порт нужен только сервисам внутри compose (они ходят по DNS-имени
+    # "ldap" в docker-сети) — публиковать наружу незачем, это лишняя
+    # поверхность атаки на каталог пользователей.
+    ports: ["127.0.0.1:3893:389"]
 
   postgres:
     # pgvector/pgvector:pg16 — официальный drop-in для postgres:16 с
@@ -21,8 +24,10 @@ services:
       POSTGRES_PASSWORD: alert
       POSTGRES_DB: alert_platform
     # Порт параметризован: 5433 часто уже занят локальной БД другого
-    # проекта; внутри compose адрес всегда postgres:5432.
-    ports: ["${POSTGRES_PORT:-5433}:5432"]
+    # проекта; внутри compose адрес всегда postgres:5432. Биндим на
+    # 127.0.0.1 — только для локальной отладки (psql/docker exec на самой
+    # машине), без публикации всей БД в интернет с паролем по умолчанию.
+    ports: ["127.0.0.1:${POSTGRES_PORT:-5433}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:

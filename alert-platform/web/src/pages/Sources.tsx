@@ -41,11 +41,22 @@ export default function Sources() {
         </form>
         {add.isError && <p className="mt-2 text-sm text-red-400">Не удалось добавить источник: {add.error.message}</p>}
       </Card>
-      <div className="mt-4 space-y-2">
+      <p className="mt-4 text-xs text-muted">
+        Каждый источник получает токен — коннектор должен передавать его в заголовке{" "}
+        <code className="rounded bg-card px-1 py-0.5">X-Source-Token</code> при вызове{" "}
+        <code className="rounded bg-card px-1 py-0.5">POST /api/v1/ingest/raw</code>.
+      </p>
+      <div className="mt-2 space-y-2">
         {data?.items.length === 0 && <EmptyState>Источников пока нет</EmptyState>}
         {data?.items.map((source) => (
           <Card key={source.id} className="flex items-center justify-between">
-            <div><div className="text-sm font-medium">{source.instance}</div><div className="text-xs text-muted">{source.system} · {source.site}</div></div>
+            <div>
+              <div className="text-sm font-medium">{source.instance}</div>
+              <div className="text-xs text-muted">{source.system} · {source.site}</div>
+              {source.api_token && (
+                <div className="mt-1 font-mono text-xs text-muted">токен: {source.api_token}</div>
+              )}
+            </div>
             <button onClick={() => remove.mutate(source.id)} className="rounded-md bg-red-500/15 px-3 py-1.5 text-xs text-red-400">Удалить</button>
           </Card>
         ))}

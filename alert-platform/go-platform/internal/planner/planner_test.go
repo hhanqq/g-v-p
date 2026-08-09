@@ -30,6 +30,42 @@ func TestRenderNewPreservesOriginal(t *testing.T) {
 	}
 }
 
+func TestRenderNewEscapesHTMLFromUntrustedAlertBody(t *testing.T) {
+	// Раздел И2 требует дословный оригинал текста алерта, а не то, что он
+	// должен буквально интерпретироваться как HTML-разметка при отправке
+	// с parse_mode=HTML — источник мониторинга не заслуживает большего
+	// доверия, чем любой другой внешний ввод, и не должен иметь возможность
+	// протащить произвольную разметку/ссылку в исходящее сообщение TrueConf.
+	malicious := "PROBLEM: <a href=\"http://evil.example\">click</a> & <script>steal()</script>"
+	text := RenderNew(ProblemData{
+		ID: 1, Priority: ptr("P0"), ObjectName: "host<1>", Site: ptr("brd"),
+		SymptomClass: "host_unreachable", SourceSystem: "zabbix", OriginalBody: malicious,
+	})
+	if strings.Contains(text, "<script>") || strings.Contains(text, "<a href") {
+		t.Fatalf("raw HTML from alert body was not escaped: %s", text)
+	}
+	if !strings.Contains(text, "&lt;script&gt;") {
+		t.Fatalf("expected escaped script tag in output: %s", text)
+	}
+	// Литеральная разметка самого шаблона (не из данных) должна остаться
+	// настоящими тегами, а не тоже эскейпиться.
+	if !strings.Contains(text, "<b>P0") {
+		t.Fatalf("template's own <b> markup should not be escaped: %s", text)
+	}
+}
+
+func TestRenderAIAnalysisEscapesLLMOutput(t *testing.T) {
+	// ИИ может дословно процитировать фрагмент вредоносного тела алерта
+	// в своём ответе — то же самое допущение, что и для OriginalBody.
+	analysis := "Возможно, из-за <img src=x onerror=alert(1)> устройство недоступно."
+	text := RenderAIAnalysis(AIAnalysisData{
+		ProblemID: 1, ObjectName: "sw-01", SymptomClass: "node_down", AIText: &analysis,
+	})
+	if strings.Contains(text, "<img") {
+		t.Fatalf("AI output HTML was not escaped: %s", text)
+	}
+}
+
 func TestRenderClosureAndDurationParity(t *testing.T) {
 	opened := time.Date(2026, 8, 6, 3, 39, 3, 0, time.UTC)
 	resolved := time.Date(2026, 8, 6, 3, 41, 8, 0, time.UTC)

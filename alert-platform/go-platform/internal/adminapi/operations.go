@@ -1,7 +1,9 @@
 package adminapi
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -55,7 +57,7 @@ func (server *Server) listSources(response http.ResponseWriter, request *http.Re
 	if !requireAdmin(response, user) {
 		return
 	}
-	rows, err := server.pool.Query(request.Context(), `SELECT id,instance,system,site,created_at FROM source_instances ORDER BY instance`)
+	rows, err := server.pool.Query(request.Context(), `SELECT id,instance,system,site,api_token,created_at FROM source_instances ORDER BY instance`)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
@@ -65,12 +67,16 @@ func (server *Server) listSources(response http.ResponseWriter, request *http.Re
 	for rows.Next() {
 		var id int64
 		var instance, system, site string
+		var token sql.NullString
 		var createdAt time.Time
-		if err := rows.Scan(&id, &instance, &system, &site, &createdAt); err != nil {
+		if err := rows.Scan(&id, &instance, &system, &site, &token, &createdAt); err != nil {
 			writeError(response, http.StatusInternalServerError, "scan sources")
 			return
 		}
-		items = append(items, map[string]any{"id": id, "instance": instance, "system": system, "site": site, "created_at": formatISO(createdAt)})
+		items = append(items, map[string]any{
+			"id": id, "instance": instance, "system": system, "site": site,
+			"api_token": nullableString(token), "created_at": formatISO(createdAt),
+		})
 	}
 	if err := rows.Err(); err != nil {
 		writeError(response, http.StatusInternalServerError, "load sources")
@@ -125,9 +131,14 @@ func (server *Server) addSource(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	defer func() { _ = tx.Rollback(request.Context()) }()
+	token, err := generateSourceToken()
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "token generation failed")
+		return
+	}
 	now := time.Now().UTC()
 	var id int64
-	err = tx.QueryRow(request.Context(), `INSERT INTO source_instances(instance,system,site,created_at) VALUES($1,$2,$3,$4) RETURNING id`, payload.Instance, payload.System, payload.Site, now).Scan(&id)
+	err = tx.QueryRow(request.Context(), `INSERT INTO source_instances(instance,system,site,api_token,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id`, payload.Instance, payload.System, payload.Site, token, now).Scan(&id)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			writeError(response, http.StatusConflict, "инстанс уже зарегистрирован")
@@ -141,7 +152,23 @@ func (server *Server) addSource(response http.ResponseWriter, request *http.Requ
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	writeJSON(response, http.StatusCreated, map[string]any{"id": id, "instance": payload.Instance, "system": payload.System, "site": payload.Site, "created_at": formatISO(now)})
+	writeJSON(response, http.StatusCreated, map[string]any{
+		"id": id, "instance": payload.Instance, "system": payload.System, "site": payload.Site,
+		"api_token": token, "created_at": formatISO(now),
+	})
+}
+
+// generateSourceToken — X-Source-Token для POST /api/v1/ingest/raw
+// (go-platform/internal/gateway/http.go). Каждый новый источник получает
+// его автоматически при регистрации — раздел «Информационная
+// безопасность», закрывает принятый риск неаутентифицированного шлюза
+// без изменения обратной совместимости уже существующих источников.
+func generateSourceToken() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
 }
 
 func (server *Server) deleteSource(response http.ResponseWriter, request *http.Request, user map[string]any) {

@@ -78,6 +78,18 @@ func (s *PostgresStore) Ingest(
 	return IngestResult{SignalID: signalID, Status: "queued"}, nil
 }
 
+func (s *PostgresStore) SourceToken(ctx context.Context, instance string) (*string, error) {
+	var token *string
+	err := s.pool.QueryRow(ctx, `SELECT api_token FROM source_instances WHERE instance=$1`, instance).Scan(&token)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("lookup source token: %w", err)
+	}
+	return token, nil
+}
+
 func (s *PostgresStore) Health(ctx context.Context) (int64, error) {
 	var depth int64
 	err := s.pool.QueryRow(ctx,

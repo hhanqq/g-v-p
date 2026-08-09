@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import html as _html
 from datetime import datetime
 
 PRIORITY_EMOJI = {"P0": "🔴", "P1": "🟠", "P2": "🟡", "P3": "⚪"}
@@ -115,7 +116,7 @@ def render_daily_summary(*, date_str: str, total: int, open_count: int, resolved
     if total == 0:
         return f"📋 <b>Сводка за {date_str}</b>\nСегодня вам не адресовано ни одного алерта."
     priority_line = " · ".join(f"{p}: {n}" for p, n in sorted(by_priority.items())) or "не определён"
-    symptom_line = ", ".join(f"{s} ({n})" for s, n in top_symptoms) or "нет"
+    symptom_line = ", ".join(f"{_html.escape(s)} ({n})" for s, n in top_symptoms) or "нет"
     lines = [
         f"📋 <b>Сводка за {date_str}</b>",
         f"Адресовано вам: {total} · открыто сейчас: {open_count} · устранено: {resolved_count}",
@@ -125,7 +126,7 @@ def render_daily_summary(*, date_str: str, total: int, open_count: int, resolved
     if ai_text:
         lines.append("")
         lines.append("<i>Сводка дня (гипотеза, сформирована ИИ):</i>")
-        lines.append(ai_text)
+        lines.append(_html.escape(ai_text))
     return "\n".join(lines)
 
 

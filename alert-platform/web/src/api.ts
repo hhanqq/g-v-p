@@ -133,6 +133,73 @@ export interface EquipmentListItem {
   name: string;
   fqdn: string | null;
   ip: string | null;
+  active_problems: number;
+  open_incidents: number;
+  alerts_24h: number;
+  alerts_30d: number;
+  last_event_at: string | null;
+  worst_priority: string | null;
+}
+
+export interface EquipmentGroup {
+  key: string;
+  label: string;
+  object_count: number;
+  active_problems: number;
+  p0_active: number;
+  p1_active: number;
+  open_incidents: number;
+  alerts_24h: number;
+  alerts_30d: number;
+  avg_mttr_minutes: number | null;
+  worst_priority: string | null;
+}
+
+export interface EquipmentSummary {
+  active_problems: number;
+  open_incidents: number;
+  alerts_24h: number;
+  alerts_30d: number;
+  last_event_at: string | null;
+  worst_priority: string | null;
+  avg_mttr_minutes_30d: number | null;
+}
+
+export interface EquipmentIncidentItem {
+  id: number;
+  root_problem_id: number;
+  priority: string | null;
+  opened_at: string;
+  closed_at: string | null;
+  member_count: number;
+  symptom_class: string;
+  object_name: string;
+}
+
+export interface TimelineEntry {
+  at: string;
+  kind: string;
+  title: string;
+  detail: string;
+}
+
+export interface AlertGraphNode {
+  id: string;
+  problem_id: number;
+  incident_id: number;
+  object_id: string | null;
+  object_name: string;
+  symptom_class: string;
+  priority: string | null;
+  status: string;
+  opened_at: string;
+  role: string;
+}
+
+export interface AlertGraphEdge {
+  from: string;
+  to: string;
+  rule_id: string | null;
 }
 
 export interface EquipmentInteraction {

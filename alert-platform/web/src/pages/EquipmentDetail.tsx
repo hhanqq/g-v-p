@@ -1,39 +1,251 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactFlow, { Background, Edge, MarkerType, Node } from "reactflow";
 import "reactflow/dist/style.css";
-import { api, ChangeHistoryItem, EquipmentDetail as EquipmentDetailType } from "../api";
-import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
+import {
+  AlertGraphEdge,
+  AlertGraphNode,
+  api,
+  ChangeHistoryItem,
+  EquipmentDetail as EquipmentDetailType,
+  EquipmentIncidentItem,
+  EquipmentSummary,
+  TimelineEntry,
+} from "../api";
+import { Card, PageHeader, PriorityBadge, StatTile, StatusBadge } from "../components/ui";
 import { useTheme } from "../theme";
 
-// Раздел «Оборудование» кейса пользователя — карточка объекта с историей
-// и графом связанных алертов, два режима анализа. "Текущий инцидент" —
-// живая цепочка незакрытой проблемы этого объекта (по сырым Problem).
-// "Исторический" режим — НЕ список отдельных Problem (их могут быть
-// сотни за долгий период), а агрегированная частота реальных корреляций
-// (services/api/metrics.py::equipment_interactions, раздел 6.4): с какими
-// другими объектами этот чаще всего оказывался в одном инциденте и в
-// какой роли (вызвал / был вызван), с числом повторений связи. ReactFlow
-// здесь — режим ПРОСМОТРА (перетаскивание/редактирование выключено).
+const TABS = ["overview", "problems", "incidents", "history", "graph", "links", "changes"] as const;
+type Tab = (typeof TABS)[number];
+const TAB_LABEL: Record<Tab, string> = {
+  overview: "Обзор", problems: "Текущие проблемы", incidents: "Инциденты",
+  history: "История", graph: "Граф алертов", links: "Связи", changes: "Изменения",
+};
+
+// Живая длительность открытого инцидента/проблемы — обновляется раз в
+// минуту, не только при перезапросе с сервера (раздел III.13 ТЗ: «для
+// активного инцидента продолжительность должна обновляться»).
+function useNow() {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
+
+function formatDuration(fromISO: string, toMs: number): string {
+  const minutes = Math.max(0, Math.round((toMs - new Date(fromISO).getTime()) / 60000));
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч ${minutes % 60} мин`;
+  return `${Math.floor(hours / 24)} дн ${hours % 24} ч`;
+}
+
+function IncidentRow({ incident, now }: { incident: EquipmentIncidentItem; now: number }) {
+  const isOpen = !incident.closed_at;
+  return (
+    <Card className="flex items-center justify-between">
+      <div>
+        <div className="text-sm font-medium">
+          INC-{incident.id.toString().padStart(4, "0")} · {incident.symptom_class} · {incident.object_name}
+        </div>
+        <div className="mt-1 text-xs text-muted">
+          Открыт {new Date(incident.opened_at).toLocaleString("ru-RU")} · {incident.member_count} связанных событий
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <PriorityBadge priority={incident.priority} />
+        {isOpen ? (
+          <span className="rounded bg-red-500/15 px-2 py-0.5 text-xs font-medium text-red-400">
+            В работе · {formatDuration(incident.opened_at, now)}
+          </span>
+        ) : (
+          <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
+            Закрыт · {formatDuration(incident.opened_at, new Date(incident.closed_at!).getTime())}
+          </span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+const TIMELINE_KIND_LABEL: Record<string, string> = {
+  problem_opened: "Открыта проблема", problem_acknowledged: "Подтверждена", problem_resolved: "Устранена",
+  incident_created: "Создан инцидент", incident_closed: "Инцидент закрыт",
+  sla_breach: "Нарушение SLA",
+};
+
+function timelineLabel(entry: TimelineEntry): string {
+  if (entry.kind.startsWith("notification_")) return entry.title;
+  if (entry.kind.startsWith("change_")) return entry.title;
+  return TIMELINE_KIND_LABEL[entry.kind] ?? entry.title;
+}
+
+function TimelineList({ entries }: { entries: TimelineEntry[] }) {
+  const byDay = useMemo(() => {
+    const groups: { day: string; items: TimelineEntry[] }[] = [];
+    for (const entry of entries) {
+      const day = new Date(entry.at).toLocaleDateString("ru-RU", { day: "numeric", month: "long" });
+      const last = groups[groups.length - 1];
+      if (last && last.day === day) last.items.push(entry);
+      else groups.push({ day, items: [entry] });
+    }
+    return groups;
+  }, [entries]);
+
+  if (entries.length === 0) return <p className="text-sm text-muted">История пока пуста.</p>;
+
+  return (
+    <div className="space-y-5">
+      {byDay.map((group) => (
+        <div key={group.day}>
+          <div className="mb-2 text-xs font-semibold uppercase text-muted">{group.day}</div>
+          <div className="space-y-1.5">
+            {group.items.map((entry, i) => (
+              <div key={i} className="flex items-start gap-3 text-sm">
+                <span className="mt-0.5 w-14 shrink-0 tabular-nums text-xs text-muted">
+                  {new Date(entry.at).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <span>
+                  <span className="font-medium">{timelineLabel(entry)}</span>
+                  {entry.detail && <span className="text-muted"> · {entry.detail}</span>}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AlertGraphView({ objectID }: { objectID: string }) {
+  const { theme } = useTheme();
+  const [scope, setScope] = useState<"historical" | "incident">("historical");
+  const [window_, setWindow] = useState("30d");
+  const [incidentID, setIncidentID] = useState<number | null>(null);
+
+  const { data: incidents } = useQuery<EquipmentIncidentItem[]>({
+    queryKey: ["equipment-incidents", objectID],
+    queryFn: () => api.get<EquipmentIncidentItem[]>(`/equipment/${encodeURIComponent(objectID)}/incidents`),
+  });
+
+  const activeIncidentID = incidentID ?? incidents?.[0]?.id ?? null;
+  const query = scope === "incident" && activeIncidentID
+    ? `scope=incident&incident_id=${activeIncidentID}`
+    : `scope=historical&window=${window_}`;
+
+  const { data: graph } = useQuery<{ nodes: AlertGraphNode[]; edges: AlertGraphEdge[] }>({
+    queryKey: ["equipment-graph", objectID, query],
+    queryFn: () => api.get(`/equipment/${encodeURIComponent(objectID)}/graph?${query}`),
+    enabled: scope === "historical" || !!activeIncidentID,
+  });
+
+  const { nodes, edges } = useMemo<{ nodes: Node[]; edges: Edge[] }>(() => {
+    if (!graph) return { nodes: [], edges: [] };
+    const byIncidentRow = new Map<number, number>();
+    const ns: Node[] = graph.nodes.map((n) => {
+      const row = byIncidentRow.get(n.incident_id) ?? 0;
+      byIncidentRow.set(n.incident_id, row + 1);
+      const col = n.role === "root" ? 0 : 1;
+      return {
+        id: n.id,
+        position: { x: col * 280, y: row * 90 },
+        data: { label: `${n.object_name}\n${n.symptom_class}${n.priority ? " · " + n.priority : ""}` },
+        style: {
+          background: n.role === "root" ? "#7f1d1d" : "#1e293b", color: "#e2e8f0",
+          border: n.status === "OPEN" || n.status === "FLAPPING" ? "1px solid #ef4444" : "1px solid #334155",
+          borderRadius: 8, fontSize: 12, whiteSpace: "pre-line", padding: 8,
+        },
+      };
+    });
+    const es: Edge[] = graph.edges.map((e, i) => ({
+      id: `e${i}`, source: e.from, target: e.to, label: e.rule_id ?? undefined,
+      markerEnd: { type: MarkerType.ArrowClosed, color: "#64748b" },
+      style: { stroke: "#64748b" }, labelStyle: { fill: "#94a3b8", fontSize: 11 },
+    }));
+    return { nodes: ns, edges: es };
+  }, [graph]);
+
+  return (
+    <div>
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <button onClick={() => setScope("historical")}
+          className={`rounded-md px-3 py-1.5 text-sm ${scope === "historical" ? "bg-accent text-white" : "bg-card text-muted"}`}>
+          Исторический
+        </button>
+        <button onClick={() => setScope("incident")}
+          className={`rounded-md px-3 py-1.5 text-sm ${scope === "incident" ? "bg-accent text-white" : "bg-card text-muted"}`}>
+          Текущий инцидент
+        </button>
+        {scope === "historical" && (
+          <select value={window_} onChange={(e) => setWindow(e.target.value)}
+            className="rounded-md border border-border bg-bg px-2 py-1.5 text-sm">
+            <option value="24h">24 часа</option>
+            <option value="7d">7 дней</option>
+            <option value="30d">30 дней</option>
+            <option value="90d">90 дней</option>
+          </select>
+        )}
+        {scope === "incident" && (
+          <select value={activeIncidentID ?? ""} onChange={(e) => setIncidentID(Number(e.target.value))}
+            className="rounded-md border border-border bg-bg px-2 py-1.5 text-sm">
+            {incidents?.map((inc) => (
+              <option key={inc.id} value={inc.id}>
+                INC-{inc.id.toString().padStart(4, "0")} · {inc.symptom_class} {inc.closed_at ? "(закрыт)" : "(в работе)"}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+      <div className="h-96 rounded-xl border border-border bg-card">
+        {nodes.length > 0 ? (
+          <ReactFlow nodes={nodes} edges={edges} fitView nodesDraggable={false} nodesConnectable={false} elementsSelectable={false}>
+            <Background color={theme === "dark" ? "#334155" : "#cbd5e1"} gap={16} />
+          </ReactFlow>
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-muted">Нет данных для этого режима</div>
+        )}
+      </div>
+    </div>
+  );
+}
 
 export default function EquipmentDetail() {
   const { id } = useParams();
-  const { theme } = useTheme();
+  const objectID = id ?? "";
+  const now = useNow();
   const queryClient = useQueryClient();
-  const [mode, setMode] = useState<"history" | "current">("history");
+  const [tab, setTab] = useState<Tab>("overview");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({ name: "", site: "", ip: "", fqdn: "", subnet: "", equipment_type: "", install_date: "" });
 
   const { data, isLoading } = useQuery<EquipmentDetailType>({
-    queryKey: ["equipment", id],
-    queryFn: () => api.get<EquipmentDetailType>(`/equipment/${encodeURIComponent(id ?? "")}`),
+    queryKey: ["equipment", objectID],
+    queryFn: () => api.get<EquipmentDetailType>(`/equipment/${encodeURIComponent(objectID)}`),
   });
-
+  const { data: summary } = useQuery<EquipmentSummary>({
+    queryKey: ["equipment-summary", objectID],
+    queryFn: () => api.get<EquipmentSummary>(`/equipment/${encodeURIComponent(objectID)}/summary`),
+    refetchInterval: 30000,
+  });
   const { data: history } = useQuery<ChangeHistoryItem[]>({
-    queryKey: ["equipment-history", id],
-    queryFn: () => api.get<ChangeHistoryItem[]>(`/equipment/${encodeURIComponent(id ?? "")}/history`),
+    queryKey: ["equipment-history", objectID],
+    queryFn: () => api.get<ChangeHistoryItem[]>(`/equipment/${encodeURIComponent(objectID)}/history`),
+    enabled: tab === "changes",
+  });
+  const { data: incidents } = useQuery<EquipmentIncidentItem[]>({
+    queryKey: ["equipment-incidents", objectID],
+    queryFn: () => api.get<EquipmentIncidentItem[]>(`/equipment/${encodeURIComponent(objectID)}/incidents`),
+    enabled: tab === "incidents",
+  });
+  const { data: timeline } = useQuery<TimelineEntry[]>({
+    queryKey: ["equipment-timeline", objectID],
+    queryFn: () => api.get<TimelineEntry[]>(`/equipment/${encodeURIComponent(objectID)}/timeline`),
+    enabled: tab === "history",
   });
 
   function startEditing() {
@@ -48,250 +260,193 @@ export default function EquipmentDetail() {
   async function saveEquipment() {
     setSaving(true);
     try {
-      await api.put(`/equipment/${encodeURIComponent(id ?? "")}`, form);
-      await queryClient.invalidateQueries({ queryKey: ["equipment", id] });
-      await queryClient.invalidateQueries({ queryKey: ["equipment"] });
+      await api.put(`/equipment/${encodeURIComponent(objectID)}`, form);
+      await queryClient.invalidateQueries({ queryKey: ["equipment", objectID] });
       setEditing(false);
     } finally {
       setSaving(false);
     }
   }
 
-  const problems = useMemo(() => {
-    if (!data) return [];
-    if (mode === "history") return data.related_problems;
-    return data.related_problems.filter((p) => p.status === "OPEN" || p.status === "FLAPPING");
-  }, [data, mode]);
-
-  const { nodes, edges } = useMemo<{ nodes: Node[]; edges: Edge[] }>(() => {
-    if (mode === "history") {
-      if (!data) return { nodes: [], edges: [] };
-      const { caused, caused_by } = data.interactions;
-      const rows = Math.max(caused.length, caused_by.length, 1);
-      const ns: Node[] = [{
-        id: "center",
-        position: { x: 280, y: ((rows - 1) * 100) / 2 },
-        data: { label: `${data.name}\n(этот объект)` },
-        style: {
-          background: "#2563eb", color: "#fff", border: "1px solid #1d4ed8", borderRadius: 8,
-          fontSize: 12, fontWeight: 600, whiteSpace: "pre-line", padding: 10, textAlign: "center",
-        },
-      }];
-      const es: Edge[] = [];
-      caused_by.forEach((item, i) => {
-        const id = `by-${item.object_id}-${item.symptom_class}`;
-        ns.push({
-          id, position: { x: 0, y: i * 100 },
-          data: { label: `${item.name}\n${item.symptom_class}` },
-          style: { background: "#1e293b", color: "#e2e8f0", border: "1px solid #f97316",
-                   borderRadius: 8, fontSize: 12, whiteSpace: "pre-line", padding: 8 },
-        });
-        es.push({
-          id: `e-${id}`, source: id, target: "center", label: `${item.count}×`,
-          markerEnd: { type: MarkerType.ArrowClosed, color: "#f97316" },
-          style: { stroke: "#f97316", strokeWidth: Math.min(1 + item.count, 6) },
-          labelStyle: { fill: "#f97316", fontSize: 11, fontWeight: 600 },
-        });
-      });
-      caused.forEach((item, i) => {
-        const id = `to-${item.object_id}-${item.symptom_class}`;
-        ns.push({
-          id, position: { x: 560, y: i * 100 },
-          data: { label: `${item.name}\n${item.symptom_class}` },
-          style: { background: "#1e293b", color: "#e2e8f0", border: "1px solid #3b82f6",
-                   borderRadius: 8, fontSize: 12, whiteSpace: "pre-line", padding: 8 },
-        });
-        es.push({
-          id: `e-${id}`, source: "center", target: id, label: `${item.count}×`,
-          markerEnd: { type: MarkerType.ArrowClosed, color: "#3b82f6" },
-          style: { stroke: "#3b82f6", strokeWidth: Math.min(1 + item.count, 6) },
-          labelStyle: { fill: "#3b82f6", fontSize: 11, fontWeight: 600 },
-        });
-      });
-      return { nodes: ns, edges: es };
-    }
-
-    // mode === "current" — живая цепочка сырых Problem этого объекта
-    const sorted = [...problems].sort((a, b) => a.opened_at.localeCompare(b.opened_at));
-    const ns: Node[] = sorted.map((p, i) => ({
-      id: String(p.id),
-      position: { x: (i % 4) * 220, y: Math.floor(i / 4) * 110 },
-      data: { label: `${p.symptom_class}\n${p.status}${p.priority ? " · " + p.priority : ""}` },
-      style: {
-        background: p.status === "OPEN" || p.status === "FLAPPING" ? "#7f1d1d" : "#1e293b",
-        color: "#e2e8f0",
-        border: "1px solid #334155",
-        borderRadius: 8,
-        fontSize: 12,
-        whiteSpace: "pre-line",
-        padding: 8,
-      },
-    }));
-    const es: Edge[] = sorted
-      .filter((p) => p.duplicate_of_problem_id)
-      .map((p) => ({
-        id: `dup-${p.id}`,
-        source: String(p.duplicate_of_problem_id),
-        target: String(p.id),
-        label: "дубль",
-        style: { stroke: "#64748b" },
-      }));
-    return { nodes: ns, edges: es };
-  }, [mode, data, problems]);
-
-  const hasHistoryData = !!data && (data.interactions.caused.length > 0 || data.interactions.caused_by.length > 0);
-  const graphHasContent = mode === "history" ? hasHistoryData : nodes.length > 0;
+  const openProblems = useMemo(
+    () => data?.related_problems.filter((p) => p.status === "OPEN" || p.status === "FLAPPING") ?? [],
+    [data]
+  );
 
   if (isLoading || !data) return <div className="text-sm text-muted">Загрузка…</div>;
 
   return (
     <div>
-      <Link to="/equipment" className="text-sm text-accent">← к списку оборудования</Link>
+      <div className="mb-2 flex items-center gap-2 text-sm text-muted">
+        <Link to="/equipment" className="hover:text-accent">Оборудование</Link>
+        <span>/</span>
+        <Link to={`/equipment?site=${encodeURIComponent(data.site)}`} className="hover:text-accent">{data.site}</Link>
+        <span>/</span>
+        <span className="text-fg">{data.name}</span>
+      </div>
+
       <div className="flex items-start justify-between">
         <PageHeader title={data.name} subtitle={`${data.equipment_type ?? data.kind} · ${data.site}`} />
         {!editing && (
-          <button
-            onClick={startEditing}
-            className="mt-1 shrink-0 rounded-md border border-border bg-card px-3 py-1.5 text-sm hover:bg-accent hover:text-white"
-          >
+          <button onClick={startEditing}
+            className="mt-1 shrink-0 rounded-md border border-border bg-card px-3 py-1.5 text-sm hover:bg-accent hover:text-white">
             Редактировать
           </button>
         )}
       </div>
 
-      {editing ? (
-        <Card className="mb-4">
-          <h3 className="mb-3 text-sm font-semibold">Редактирование объекта</h3>
-          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="Название" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
-            <input value={form.site} onChange={(e) => setForm({ ...form, site: e.target.value })}
-              placeholder="Площадка" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
-            <input value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })}
-              placeholder="IP" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
-            <input value={form.fqdn} onChange={(e) => setForm({ ...form, fqdn: e.target.value })}
-              placeholder="FQDN" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
-            <input value={form.subnet} onChange={(e) => setForm({ ...form, subnet: e.target.value })}
-              placeholder="Подсеть" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
-            <input value={form.equipment_type} onChange={(e) => setForm({ ...form, equipment_type: e.target.value })}
-              placeholder="Тип оборудования" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
-            <input type="date" value={form.install_date} onChange={(e) => setForm({ ...form, install_date: e.target.value })}
-              className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
-          </div>
-          <div className="mt-3 flex gap-2">
-            <button onClick={saveEquipment} disabled={saving}
-              className="rounded-md bg-accent px-4 py-2 text-sm text-white disabled:opacity-50">
-              {saving ? "Сохранение…" : "Сохранить"}
-            </button>
-            <button onClick={() => setEditing(false)} disabled={saving}
-              className="rounded-md border border-border px-4 py-2 text-sm hover:bg-bg">
-              Отмена
-            </button>
-          </div>
-        </Card>
-      ) : (
-        <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <Card><div className="text-xs text-muted">IP</div><div className="text-sm">{data.ip ?? "—"}</div></Card>
-          <Card><div className="text-xs text-muted">FQDN</div><div className="text-sm">{data.fqdn ?? "—"}</div></Card>
-          <Card><div className="text-xs text-muted">Подсеть</div><div className="text-sm">{data.subnet ?? "—"}</div></Card>
-          <Card><div className="text-xs text-muted">Введено в эксплуатацию</div><div className="text-sm">{data.install_date ?? "—"}</div></Card>
-        </div>
-      )}
-
-      <Card className="mb-4">
-        <div className="text-xs text-muted">Ответственные группы</div>
-        {data.responsible_groups.length === 0 ? (
-          <div className="mt-1 text-sm text-muted">
-            Не назначены — настройте в разделе{" "}
-            <Link to="/groups" className="text-accent">
-              «Группы»
-            </Link>
-            .
-          </div>
-        ) : (
-          <div className="mt-1 flex flex-wrap gap-2">
-            {data.responsible_groups.map((g) => (
-              <Link
-                key={g.id}
-                to="/groups"
-                className="rounded bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent"
-              >
-                {g.name}
-              </Link>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold">
-          Граф связанных алертов
-          {mode === "history"
-            ? ` (${data.interactions.caused.length + data.interactions.caused_by.length} связей)`
-            : ` (${problems.length})`}
-        </h3>
-        <div className="flex gap-2">
-          <button
-            onClick={() => setMode("history")}
-            className={`rounded-md px-3 py-1.5 text-sm ${mode === "history" ? "bg-accent text-white" : "bg-card text-muted"}`}
-          >
-            Исторический режим
-          </button>
-          <button
-            onClick={() => setMode("current")}
-            className={`rounded-md px-3 py-1.5 text-sm ${mode === "current" ? "bg-accent text-white" : "bg-card text-muted"}`}
-          >
-            Текущий инцидент
-          </button>
-        </div>
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <StatTile label="Активных проблем" value={summary?.active_problems ?? "—"} />
+        <StatTile label="Открытых инцидентов" value={summary?.open_incidents ?? "—"} />
+        <StatTile label="Алертов за 24ч" value={summary?.alerts_24h ?? "—"} />
+        <StatTile label="Алертов за 30д" value={summary?.alerts_30d ?? "—"} />
+        <StatTile
+          label="MTTR 30д"
+          value={summary?.avg_mttr_minutes_30d != null ? `${Math.round(summary.avg_mttr_minutes_30d)} мин` : "—"}
+        />
       </div>
 
-      {mode === "history" && hasHistoryData && (
-        <p className="mb-2 text-xs text-muted">
-          <span className="text-orange-400">← вызвано другим объектом</span> · <span className="text-blue-400">вызвал другой объект →</span> ·
-          толщина линии и число — сколько раз эта связь повторялась в истории (раздел 6.4, реальные корреляции, не отдельные события)
-        </p>
-      )}
-
-      <div className="h-96 rounded-xl border border-border bg-card">
-        {graphHasContent ? (
-          <ReactFlow nodes={nodes} edges={edges} fitView nodesDraggable={false} nodesConnectable={false} elementsSelectable={false}>
-            <Background color={theme === "dark" ? "#334155" : "#cbd5e1"} gap={16} />
-          </ReactFlow>
-        ) : (
-          <div className="flex h-full items-center justify-center text-sm text-muted">
-            {mode === "history" ? "Корреляций с другими объектами пока не зафиксировано" : "Нет данных для этого режима"}
-          </div>
-        )}
-      </div>
-
-      <h3 className="mb-2 mt-6 text-sm font-semibold">История событий</h3>
-      <div className="space-y-2">
-        {problems.map((p) => (
-          <Card key={p.id} className="flex items-center justify-between">
-            <div className="text-sm">{p.symptom_class} · {new Date(p.opened_at).toLocaleString("ru-RU")}</div>
-            <div className="flex gap-2">
-              <PriorityBadge priority={p.priority} />
-              <StatusBadge status={p.status} />
-            </div>
-          </Card>
+      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-border">
+        {TABS.map((t) => (
+          <button key={t} onClick={() => setTab(t)}
+            className={`shrink-0 border-b-2 px-3 py-2 text-sm ${tab === t ? "border-accent font-medium text-fg" : "border-transparent text-muted"}`}>
+            {TAB_LABEL[t]}
+          </button>
         ))}
       </div>
 
-      <h3 className="mb-2 mt-6 text-sm font-semibold">История изменений</h3>
-      <p className="mb-2 text-xs text-muted">Правки самой карточки объекта — кто, что и когда менял (не путать с историей событий выше).</p>
-      {(!history || history.length === 0) ? (
-        <p className="text-sm text-muted">Изменений записи пока не было.</p>
-      ) : (
+      {tab === "overview" && (
+        <div>
+          {editing ? (
+            <Card className="mb-4">
+              <h3 className="mb-3 text-sm font-semibold">Редактирование объекта</h3>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="Название" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+                <input value={form.site} onChange={(e) => setForm({ ...form, site: e.target.value })}
+                  placeholder="Площадка" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+                <input value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })}
+                  placeholder="IP" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+                <input value={form.fqdn} onChange={(e) => setForm({ ...form, fqdn: e.target.value })}
+                  placeholder="FQDN" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+                <input value={form.subnet} onChange={(e) => setForm({ ...form, subnet: e.target.value })}
+                  placeholder="Подсеть" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+                <input value={form.equipment_type} onChange={(e) => setForm({ ...form, equipment_type: e.target.value })}
+                  placeholder="Тип оборудования" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+                <input type="date" value={form.install_date} onChange={(e) => setForm({ ...form, install_date: e.target.value })}
+                  className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+              </div>
+              <div className="mt-3 flex gap-2">
+                <button onClick={saveEquipment} disabled={saving}
+                  className="rounded-md bg-accent px-4 py-2 text-sm text-white disabled:opacity-50">
+                  {saving ? "Сохранение…" : "Сохранить"}
+                </button>
+                <button onClick={() => setEditing(false)} disabled={saving}
+                  className="rounded-md border border-border px-4 py-2 text-sm hover:bg-bg">
+                  Отмена
+                </button>
+              </div>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+              <Card><div className="text-xs text-muted">IP</div><div className="text-sm">{data.ip ?? "—"}</div></Card>
+              <Card><div className="text-xs text-muted">FQDN</div><div className="text-sm">{data.fqdn ?? "—"}</div></Card>
+              <Card><div className="text-xs text-muted">Подсеть</div><div className="text-sm">{data.subnet ?? "—"}</div></Card>
+              <Card><div className="text-xs text-muted">Введено в эксплуатацию</div><div className="text-sm">{data.install_date ?? "—"}</div></Card>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "problems" && (
         <div className="space-y-2">
-          {history.map((h) => (
-            <Card key={h.id} className="text-sm">
-              <div className="flex items-center justify-between">
-                <span>{h.actor} <span className="text-muted">({h.actor_role})</span> · {h.action}</span>
-                <span className="text-xs text-muted">{new Date(h.occurred_at).toLocaleString("ru-RU")}</span>
+          {openProblems.length === 0 && <p className="text-sm text-muted">Активных проблем нет.</p>}
+          {openProblems.map((p) => (
+            <Card key={p.id} className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">{p.symptom_class}</div>
+                <div className="mt-1 text-xs text-muted">
+                  Открыта {new Date(p.opened_at).toLocaleString("ru-RU")} · длительность {formatDuration(p.opened_at, now)}
+                  {p.incident_id && (
+                    <> · <Link to={`/incidents/${p.incident_id}`} className="text-accent">INC-{p.incident_id.toString().padStart(4, "0")}</Link></>
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <PriorityBadge priority={p.priority} />
+                <StatusBadge status={p.status} />
               </div>
             </Card>
           ))}
+        </div>
+      )}
+
+      {tab === "incidents" && (
+        <div className="space-y-2">
+          {(!incidents || incidents.length === 0) && <p className="text-sm text-muted">Инцидентов, связанных с этим объектом, не найдено.</p>}
+          {incidents?.map((inc) => <IncidentRow key={inc.id} incident={inc} now={now} />)}
+        </div>
+      )}
+
+      {tab === "history" && <TimelineList entries={timeline ?? []} />}
+
+      {tab === "graph" && <AlertGraphView objectID={objectID} />}
+
+      {tab === "links" && (
+        <div>
+          <Card className="mb-4">
+            <div className="text-xs text-muted">Ответственные группы</div>
+            {data.responsible_groups.length === 0 ? (
+              <div className="mt-1 text-sm text-muted">
+                Не назначены — настройте в разделе <Link to="/groups" className="text-accent">«Группы»</Link>.
+              </div>
+            ) : (
+              <div className="mt-1 flex flex-wrap gap-2">
+                {data.responsible_groups.map((g) => (
+                  <Link key={g.id} to="/groups" className="rounded bg-accent/15 px-2 py-0.5 text-xs font-medium text-accent">
+                    {g.name}
+                  </Link>
+                ))}
+              </div>
+            )}
+          </Card>
+          <h3 className="mb-2 text-sm font-semibold">Частые корреляции с другими объектами</h3>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <div className="mb-1 text-xs text-muted">Вызывал проблемы у других объектов</div>
+              {data.interactions.caused.length === 0 && <p className="text-sm text-muted">Не зафиксировано.</p>}
+              {data.interactions.caused.map((c, i) => (
+                <div key={i} className="text-sm">{c.name} · {c.symptom_class} · {c.count}×</div>
+              ))}
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-muted">Проблемы у этого объекта вызывали другие</div>
+              {data.interactions.caused_by.length === 0 && <p className="text-sm text-muted">Не зафиксировано.</p>}
+              {data.interactions.caused_by.map((c, i) => (
+                <div key={i} className="text-sm">{c.name} · {c.symptom_class} · {c.count}×</div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tab === "changes" && (
+        <div>
+          <p className="mb-3 text-xs text-muted">Правки самой карточки объекта — кто, что и когда менял.</p>
+          {(!history || history.length === 0) ? (
+            <p className="text-sm text-muted">Изменений записи пока не было.</p>
+          ) : (
+            <div className="space-y-2">
+              {history.map((h) => (
+                <Card key={h.id} className="text-sm">
+                  <div className="flex items-center justify-between">
+                    <span>{h.actor} <span className="text-muted">({h.actor_role})</span> · {h.action}</span>
+                    <span className="text-xs text-muted">{new Date(h.occurred_at).toLocaleString("ru-RU")}</span>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

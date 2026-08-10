@@ -271,6 +271,53 @@ export interface AuditItem {
   created_at: string;
 }
 
+// Раздел «История изменений» — структурированный before/after поверх
+// audit_log (internal/changelog, go-platform). Карта объекта/сотрудника
+// читает Postgres напрямую (ChangeHistoryItem); кросс-сущностный
+// low-code поиск идёт через ClickHouse (ChangeHistorySearchResult).
+export interface ChangeHistoryItem {
+  id: number;
+  occurred_at: string;
+  actor: string;
+  actor_role: string;
+  action: string;
+  result: string;
+  before_json: string;
+  after_json: string;
+}
+
+export interface ChangeHistoryField {
+  label: string;
+  kind: "string" | "datetime";
+  ops: string[];
+}
+
+export interface ChangeHistoryCondition {
+  field: string;
+  op: string;
+  value: string;
+}
+
+export interface ChangeHistorySearchRequest {
+  match: "all" | "any";
+  conditions: ChangeHistoryCondition[];
+  limit?: number;
+}
+
+export interface ChangeHistorySearchResult {
+  event_id: string;
+  occurred_at: string;
+  actor: string;
+  actor_role: string;
+  action: string;
+  resource_type: string;
+  resource_id: string;
+  result: string;
+  detail: string;
+  before_json: string;
+  after_json: string;
+}
+
 export interface DemoScenario {
   name: string;
   description: string;

@@ -45,6 +45,7 @@ const NAV: NavItem[] = [
   { label: "SLA", to: "/sla", icon: "⏱️", badge: "этап 2" },
   { label: "Аналитика", to: "/analytics", icon: "📈", badge: "этап 2" },
   { label: "Интеграции", to: "/integrations", icon: "🔌" },
+  { label: "История изменений", to: "/change-history", icon: "🕓" },
 ];
 
 export default function Sidebar({ user }: { user: CurrentUser }) {

@@ -159,6 +159,7 @@ services:
       LDAP_SEARCH_PASSWORD: ${LDAP_SEARCH_PASSWORD:-svc123}
       SESSION_SECRET: ${SESSION_SECRET:-dispatcher-demo-secret}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      CLICKHOUSE_URL: clickhouse://alert:${CLICKHOUSE_PASSWORD:-alert}@clickhouse:9000/alerting
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -166,6 +167,8 @@ services:
         condition: service_started
       ldap:
         condition: service_started
+      clickhouse-migrate:
+        condition: service_completed_successfully
 
   delivery-planner:
     build:

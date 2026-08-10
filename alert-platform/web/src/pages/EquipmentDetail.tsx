@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactFlow, { Background, Edge, MarkerType, Node } from "reactflow";
 import "reactflow/dist/style.css";
-import { api, EquipmentDetail as EquipmentDetailType } from "../api";
+import { api, ChangeHistoryItem, EquipmentDetail as EquipmentDetailType } from "../api";
 import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
 import { useTheme } from "../theme";
 
@@ -29,6 +29,11 @@ export default function EquipmentDetail() {
   const { data, isLoading } = useQuery<EquipmentDetailType>({
     queryKey: ["equipment", id],
     queryFn: () => api.get<EquipmentDetailType>(`/equipment/${encodeURIComponent(id ?? "")}`),
+  });
+
+  const { data: history } = useQuery<ChangeHistoryItem[]>({
+    queryKey: ["equipment-history", id],
+    queryFn: () => api.get<ChangeHistoryItem[]>(`/equipment/${encodeURIComponent(id ?? "")}/history`),
   });
 
   function startEditing() {
@@ -272,6 +277,23 @@ export default function EquipmentDetail() {
           </Card>
         ))}
       </div>
+
+      <h3 className="mb-2 mt-6 text-sm font-semibold">История изменений</h3>
+      <p className="mb-2 text-xs text-muted">Правки самой карточки объекта — кто, что и когда менял (не путать с историей событий выше).</p>
+      {(!history || history.length === 0) ? (
+        <p className="text-sm text-muted">Изменений записи пока не было.</p>
+      ) : (
+        <div className="space-y-2">
+          {history.map((h) => (
+            <Card key={h.id} className="text-sm">
+              <div className="flex items-center justify-between">
+                <span>{h.actor} <span className="text-muted">({h.actor_role})</span> · {h.action}</span>
+                <span className="text-xs text-muted">{new Date(h.occurred_at).toLocaleString("ru-RU")}</span>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

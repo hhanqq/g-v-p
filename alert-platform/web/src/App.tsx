@@ -19,6 +19,7 @@ import Analytics from "./pages/Analytics";
 import Integrations from "./pages/Integrations";
 import Sources from "./pages/Sources";
 import Audit from "./pages/Audit";
+import ChangeHistory from "./pages/ChangeHistory";
 import Demo from "./pages/Demo";
 
 export default function App() {
@@ -61,6 +62,7 @@ export default function App() {
           <Route path="/integrations" element={<Integrations />} />
           <Route path="/sources" element={<Sources />} />
           <Route path="/audit" element={<Audit />} />
+          <Route path="/change-history" element={<ChangeHistory />} />
           <Route path="/demo" element={<Demo />} />
         </Routes>
       </main>

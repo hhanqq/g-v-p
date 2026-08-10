@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -23,13 +24,21 @@ import (
 )
 
 type Server struct {
-	pool      *pgxpool.Pool
-	demo      *httputil.ReverseProxy
-	staticDir string
-	sessions  *SessionManager
+	pool       *pgxpool.Pool
+	demo       *httputil.ReverseProxy
+	staticDir  string
+	sessions   *SessionManager
+	clickhouse clickhouse.Conn
 }
 
 func (server *Server) UseSessions(sessions *SessionManager) { server.sessions = sessions }
+
+// UseClickHouse подключает опциональный аналитический сток для
+// low-code поиска (раздел «История изменений»). Не установлен — не
+// авария: остальной admin API (LDAP, источники, группы, карточки)
+// не зависит от ClickHouse, только /api/change-history/search вернёт
+// понятную 503 вместо паники на nil-указателе.
+func (server *Server) UseClickHouse(conn clickhouse.Conn) { server.clickhouse = conn }
 
 func New(pool *pgxpool.Pool, demoURL, staticDir string) (*Server, error) {
 	target, err := url.Parse(demoURL)
@@ -130,6 +139,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.createEmployee)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/employees/") {
+		server.withAuth(response, request, server.employeeHistory)
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/employees/") {
 		server.withAuth(response, request, server.getEmployee)
 		return
@@ -151,12 +164,24 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.createEquipment)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/equipment/") {
+		server.withAuth(response, request, server.equipmentHistory)
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/equipment/") {
 		server.withAuth(response, request, server.getEquipment)
 		return
 	}
 	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/equipment/") {
 		server.withAuth(response, request, server.updateEquipment)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/change-history/fields" {
+		server.withAuth(response, request, server.changeHistoryFields)
+		return
+	}
+	if request.Method == http.MethodPost && path == "/api/change-history/search" {
+		server.withAuth(response, request, server.changeHistorySearch)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/scenarios" {

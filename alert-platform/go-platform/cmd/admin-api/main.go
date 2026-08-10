@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/adminapi"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -31,6 +32,17 @@ func main() {
 	)
 	if err != nil {
 		log.Fatal(err)
+	}
+	// ClickHouse — опциональный аналитический сток для low-code поиска
+	// (раздел «История изменений»). Не задан CLICKHOUSE_URL — не авария:
+	// остальной admin API работает как раньше, только поиск вернёт 503.
+	if chURL := os.Getenv("CLICKHOUSE_URL"); chURL != "" {
+		chConn, err := changelog.ConnectClickHouse(chURL)
+		if err != nil {
+			log.Printf("admin-api: connect clickhouse: %v (low-code поиск будет недоступен)", err)
+		} else {
+			handler.UseClickHouse(chConn)
+		}
 	}
 	handler.UseSessions(adminapi.NewSessionManager(
 		adminapi.NewLDAPAuthenticator(

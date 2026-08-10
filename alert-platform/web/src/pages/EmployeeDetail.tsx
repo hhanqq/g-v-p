@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, EmployeeDetail as EmployeeDetailType } from "../api";
+import { api, ChangeHistoryItem, EmployeeDetail as EmployeeDetailType } from "../api";
 import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
 
 const NOTIFICATION_TYPE_LABEL: Record<string, string> = {
@@ -33,6 +33,11 @@ export default function EmployeeDetail() {
   const { data, isLoading } = useQuery<EmployeeDetailType>({
     queryKey: ["employee", id],
     queryFn: () => api.get<EmployeeDetailType>(`/employees/${id}`),
+  });
+
+  const { data: history } = useQuery<ChangeHistoryItem[]>({
+    queryKey: ["employee-history", id],
+    queryFn: () => api.get<ChangeHistoryItem[]>(`/employees/${id}/history`),
   });
 
   async function setStatus(status: string) {
@@ -179,7 +184,7 @@ export default function EmployeeDetail() {
         </div>
       </Card>
 
-      <Card>
+      <Card className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">Подписки на уведомления</h3>
         {data.subscriptions.length === 0 && <p className="text-sm text-muted">Подписок нет.</p>}
         <ul className="space-y-2">
@@ -190,6 +195,23 @@ export default function EmployeeDetail() {
             </li>
           ))}
         </ul>
+      </Card>
+
+      <Card>
+        <h3 className="mb-1 text-sm font-semibold">История изменений</h3>
+        <p className="mb-3 text-xs text-muted">Правки самой карточки сотрудника — кто, что и когда менял.</p>
+        {(!history || history.length === 0) ? (
+          <p className="text-sm text-muted">Изменений записи пока не было.</p>
+        ) : (
+          <div className="space-y-2">
+            {history.map((h) => (
+              <div key={h.id} className="flex items-center justify-between rounded-lg bg-bg px-3 py-2 text-sm">
+                <span>{h.actor} <span className="text-muted">({h.actor_role})</span> · {h.action}</span>
+                <span className="text-xs text-muted">{new Date(h.occurred_at).toLocaleString("ru-RU")}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </Card>
     </div>
   );

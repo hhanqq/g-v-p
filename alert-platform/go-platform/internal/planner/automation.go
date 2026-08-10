@@ -2,6 +2,7 @@ package planner
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -305,14 +306,41 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4,notified_count=notified_count+1 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt); err != nil {
 			return err
 		}
+		// channel на узле notify (раздел VII.30 ТЗ): "trueconf" (по
+		// умолчанию, сохраняет поведение всех существующих сценариев),
+		// "email" или "both". Отдельного "fallback"-режима не нужно —
+		// TrueConf→wait→ack_check(нет)→notify(channel=email) уже выражает
+		// сценарий "TrueConf, нет реакции 5 минут → Email резервному"
+		// обычной эскалационной веткой графа, без специального кода.
+		channel, _ := outcome.Step.Data["channel"].(string)
+		sendTrueconf, sendEmail := channel != "email", channel == "email" || channel == "both"
 		for _, username := range usernames {
-			if _, err = execCreateDelivery(ctx, tx, delivery{
-				ProblemID: problemID, Type: "SCENARIO", Recipient: username,
-				ChatID:            fmt.Sprintf("scenario:%d:%d:%s", scenarioID, notified+1, username),
-				Text:              RenderScenario(problem, scenarioName, notified > 0),
-				IdempotencySuffix: fmt.Sprintf("scenario:%d:notification:%d", scenarioID, notified+1),
-			}); err != nil {
-				return err
+			text := RenderScenario(problem, scenarioName, notified > 0)
+			if sendTrueconf {
+				if _, err = execCreateDelivery(ctx, tx, delivery{
+					ProblemID: problemID, Type: "SCENARIO", Recipient: username,
+					ChatID:            fmt.Sprintf("scenario:%d:%d:%s", scenarioID, notified+1, username),
+					Text:              text,
+					IdempotencySuffix: fmt.Sprintf("scenario:%d:notification:%d", scenarioID, notified+1),
+				}); err != nil {
+					return err
+				}
+			}
+			if sendEmail {
+				var email sql.NullString
+				if err := tx.QueryRow(ctx, `SELECT email FROM subscribers WHERE trueconf_username=$1`, username).Scan(&email); err != nil {
+					return err
+				}
+				if email.Valid && email.String != "" {
+					subject := fmt.Sprintf("Сценарий «%s» · %s", scenarioName, problem.SymptomClass)
+					if _, err = execCreateDelivery(ctx, tx, delivery{
+						ProblemID: problemID, Type: "SCENARIO", Recipient: email.String,
+						ChatID: "email:" + email.String, Channel: "email", Subject: &subject, Text: text,
+						IdempotencySuffix: fmt.Sprintf("scenario:%d:notification:%d:email", scenarioID, notified+1),
+					}); err != nil {
+						return err
+					}
+				}
 			}
 		}
 		return tx.Commit(ctx)

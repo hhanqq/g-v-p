@@ -49,6 +49,7 @@ interface NotifyData {
   employee_ids?: number[];
   employee_labels?: string[];
   recipient_mode?: "all" | "first_available";
+  channel?: "trueconf" | "email" | "both";
 }
 
 interface WaitData {
@@ -119,6 +120,9 @@ function NotifyNode({ data, selected }: NodeProps<NotifyData>) {
       <div className="mb-1 font-semibold text-fg">Уведомить</div>
       <div className="text-muted">{target}</div>
       {data.recipient_mode === "first_available" && <div className="mt-1 text-[10px] text-accent">первый доступный</div>}
+      {data.channel && data.channel !== "trueconf" && (
+        <div className="mt-1 text-[10px] text-accent">канал: {data.channel === "both" ? "TrueConf + Email" : "Email"}</div>
+      )}
       {/* Первый handle без id — sourceHandle остаётся null, парсится сервером
           как "default" (существующие сохранённые графы не ломаются).
           Второй — явная ветка эскалации, когда получателей ноль. */}
@@ -651,6 +655,23 @@ export default function ScenarioEditor() {
                 резолвит доступность каждого кандидата (карточка сотрудника, раздел «Доступность») и уведомляет
                 первого, кто сейчас доступен; если доступных нет — работает нижнее ребро «нет получателя».
               </p>
+              <div>
+                <label className="mb-1 block text-xs text-muted">Канал доставки</label>
+                <select
+                  value={selectedNode.data.channel ?? "trueconf"}
+                  onChange={(e) => updateSelectedData({ channel: e.target.value as NotifyData["channel"] })}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="trueconf">TrueConf (по умолчанию)</option>
+                  <option value="email">Email</option>
+                  <option value="both">TrueConf + Email</option>
+                </select>
+                <p className="mt-1 text-xs text-muted">
+                  «Email» уходит на e-mail из карточки сотрудника (если он указан). Для сценария
+                  «TrueConf, нет реакции → Email резервному» не нужен отдельный режим — постройте
+                  обычную ветку эскалации (wait → проверка реакции → notify с каналом Email).
+                </p>
+              </div>
             </div>
           )}
 

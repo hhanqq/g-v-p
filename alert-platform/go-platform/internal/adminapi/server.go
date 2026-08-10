@@ -205,6 +205,9 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	if server.routeScenarios(response, request, path) {
 		return
 	}
+	if server.routeCoverage(response, request, path) {
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/sla-rules" {
 		server.withAuth(response, request, server.listSLARules)
 		return

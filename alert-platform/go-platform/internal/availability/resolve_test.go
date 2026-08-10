@@ -8,8 +8,8 @@ import (
 func TestOutranksByPriorityRegardlessOfRecency(t *testing.T) {
 	older := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Hour)
-	override := intervalRow{id: 1, kind: "override_unavailable", createdAt: older}
-	vacation := intervalRow{id: 2, kind: "vacation", createdAt: newer}
+	override := Interval{ID: 1, Kind: "override_unavailable", CreatedAt: older}
+	vacation := Interval{ID: 2, Kind: "vacation", CreatedAt: newer}
 	if !outranks(override, vacation) {
 		t.Fatal("override_unavailable (rank 100) should outrank a newer vacation (rank 85)")
 	}
@@ -20,16 +20,16 @@ func TestOutranksByPriorityRegardlessOfRecency(t *testing.T) {
 
 func TestOutranksTiesByCreatedAtThenID(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	a := intervalRow{id: 5, kind: "shift", createdAt: t0}
-	b := intervalRow{id: 6, kind: "shift", createdAt: t0.Add(time.Minute)}
+	a := Interval{ID: 5, Kind: "shift", CreatedAt: t0}
+	b := Interval{ID: 6, Kind: "shift", CreatedAt: t0.Add(time.Minute)}
 	if outranks(a, b) {
 		t.Fatal("older row of equal rank should not outrank a newer one")
 	}
 	if !outranks(b, a) {
 		t.Fatal("newer row of equal rank should outrank an older one")
 	}
-	c := intervalRow{id: 7, kind: "shift", createdAt: t0}
-	d := intervalRow{id: 8, kind: "shift", createdAt: t0}
+	c := Interval{ID: 7, Kind: "shift", CreatedAt: t0}
+	d := Interval{ID: 8, Kind: "shift", CreatedAt: t0}
 	if outranks(c, d) {
 		t.Fatal("equal rank and timestamp should tie-break on lower id losing")
 	}
@@ -71,6 +71,39 @@ func TestPriorityTableExhaustive(t *testing.T) {
 	}
 	if len(priorities) != len(cases) {
 		t.Fatalf("priorities table has %d entries, test covers %d — keep them in sync", len(priorities), len(cases))
+	}
+}
+
+func TestResolveFromIntervalsHonorsValidFromAndValidUntil(t *testing.T) {
+	t0 := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	until := t0.Add(24 * time.Hour)
+	intervals := []Interval{
+		{ID: 1, SubscriberID: 42, Kind: "vacation", ValidFrom: t0, ValidUntil: &until, CreatedAt: t0},
+	}
+	before := ResolveFromIntervals(intervals, []int64{42}, t0.Add(-time.Hour))
+	if !before[42].Available {
+		t.Fatalf("subscriber should be available before the interval starts: %+v", before[42])
+	}
+	during := ResolveFromIntervals(intervals, []int64{42}, t0.Add(time.Hour))
+	if during[42].Available {
+		t.Fatalf("subscriber should be unavailable during the vacation interval: %+v", during[42])
+	}
+	after := ResolveFromIntervals(intervals, []int64{42}, until.Add(time.Hour))
+	if !after[42].Available {
+		t.Fatalf("subscriber should be available again after the interval ends: %+v", after[42])
+	}
+}
+
+func TestResolveFromIntervalsInjectsHypotheticalCandidate(t *testing.T) {
+	// coverage.Sweep's dry-run injects a not-yet-saved interval alongside
+	// real ones — this is the exact mechanism it relies on.
+	t0 := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	until := t0.Add(24 * time.Hour)
+	real := Interval{ID: 1, SubscriberID: 7, Kind: "available", ValidFrom: t0.Add(-time.Hour), CreatedAt: t0.Add(-time.Hour)}
+	hypothetical := Interval{ID: -1, SubscriberID: 7, Kind: "vacation", ValidFrom: t0, ValidUntil: &until, CreatedAt: t0}
+	result := ResolveFromIntervals([]Interval{real, hypothetical}, []int64{7}, t0.Add(time.Hour))
+	if result[7].Available {
+		t.Fatalf("higher-priority hypothetical vacation should win over the real 'available' row: %+v", result[7])
 	}
 }
 

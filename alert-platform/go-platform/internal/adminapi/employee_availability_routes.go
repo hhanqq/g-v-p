@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/availability"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/coverage"
 )
 
 // routeEmployeeAvailability обрабатывает /api/employees/{id}/availability
@@ -356,9 +358,73 @@ func (server *Server) employeeAvailabilityDryRun(response http.ResponseWriter, r
 		writeError(response, http.StatusUnprocessableEntity, "invalid dry-run payload")
 		return
 	}
-	if _, err := parseISO(payload.ValidFrom); err != nil {
+	validFrom, err := parseISO(payload.ValidFrom)
+	if err != nil {
 		writeError(response, http.StatusUnprocessableEntity, "invalid valid_from")
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"warnings": []string{}})
+	var validUntil *time.Time
+	if payload.ValidUntil != nil {
+		parsed, err := parseISO(*payload.ValidUntil)
+		if err != nil {
+			writeError(response, http.StatusUnprocessableEntity, "invalid valid_until")
+			return
+		}
+		validUntil = &parsed
+	}
+	ctx := request.Context()
+	// Окно проверки — сам кандидат-интервал; бессрочный кандидат
+	// проверяется на разумный горизонт вперёд (90 дней), а не вечность —
+	// покрытие дальше всё равно можно пересчитать позже.
+	sweepTo := validFrom.Add(90 * 24 * time.Hour)
+	if validUntil != nil {
+		sweepTo = *validUntil
+	}
+	rows, err := server.pool.Query(ctx, `
+		SELECT policy.id, policy.name, policy.group_id, policy.min_available
+		FROM coverage_policies policy
+		JOIN group_members member ON member.group_id = policy.group_id
+		WHERE policy.active=TRUE AND member.subscriber_id=$1`, id)
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	type policyRow struct {
+		id, groupID  int64
+		name         string
+		minAvailable int
+	}
+	var policies []policyRow
+	for rows.Next() {
+		var p policyRow
+		if err := rows.Scan(&p.id, &p.name, &p.groupID, &p.minAvailable); err != nil {
+			rows.Close()
+			writeError(response, http.StatusInternalServerError, "scan coverage policies")
+			return
+		}
+		policies = append(policies, p)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		writeError(response, http.StatusInternalServerError, "load coverage policies")
+		return
+	}
+	rows.Close()
+
+	warnings := make([]string, 0)
+	candidate := &coverage.CandidateInterval{SubscriberID: id, Kind: payload.Kind, ValidFrom: validFrom, ValidUntil: validUntil}
+	for _, p := range policies {
+		gaps, err := coverage.Sweep(ctx, server.pool, p.groupID, validFrom, sweepTo, p.minAvailable, candidate)
+		if err != nil {
+			writeError(response, http.StatusServiceUnavailable, "database unavailable")
+			return
+		}
+		if len(gaps) > 0 {
+			warnings = append(warnings, fmt.Sprintf(
+				"нарушает покрытие «%s» (минимум %d) — начиная с %s",
+				p.name, p.minAvailable, gaps[0].From.Format("2006-01-02 15:04"),
+			))
+		}
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"warnings": warnings})
 }

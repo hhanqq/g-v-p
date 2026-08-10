@@ -13,7 +13,7 @@ interface NavItem {
   label: string;
   to: string;
   icon: string;
-  badge?: "этап 2";
+  badge?: "этап 2" | "бета";
   children?: NavChild[];
 }
 
@@ -41,6 +41,7 @@ const NAV: NavItem[] = [
     ],
   },
   { label: "Группы", to: "/groups", icon: "🧑‍🤝‍🧑" },
+  { label: "Покрытие", to: "/coverage", icon: "🛡️", badge: "бета" },
   { label: "Сценарии", to: "/scenarios", icon: "🧩", badge: "этап 2" },
   { label: "SLA", to: "/sla", icon: "⏱️", badge: "этап 2" },
   { label: "Аналитика", to: "/analytics", icon: "📈", badge: "этап 2" },

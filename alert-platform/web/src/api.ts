@@ -247,6 +247,30 @@ export interface ScenarioDetail extends ScenarioListItem {
   created_by: string | null;
 }
 
+export interface CoveragePolicy {
+  id: number;
+  name: string;
+  group_id: number;
+  group_name: string;
+  min_available: number;
+  object_id: string | null;
+  equipment_type: string | null;
+  site: string | null;
+  active: boolean;
+}
+
+export interface CoverageGap {
+  from: string;
+  to: string;
+  min_available: number;
+}
+
+export interface PolicyGapsResponse {
+  policy_id: number;
+  policy_name: string;
+  gaps: CoverageGap[];
+}
+
 export interface AvailabilityInterval {
   id: number;
   kind: string;

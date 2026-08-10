@@ -54,11 +54,53 @@ var priorities = map[string]priorityRule{
 	"available":            {rank: 10, available: true},
 }
 
-type intervalRow struct {
-	id         int64
-	kind       string
-	delegateTo *int64
-	createdAt  time.Time
+// Interval — сырая строка employee_availability. Экспортирован (не
+// только для Resolve): internal/coverage.Sweep резолвит доступность в
+// НЕСКОЛЬКИХ точках времени сразу и должен уметь подмешать один
+// гипотетический (ещё не сохранённый) интервал в реальный набор — это
+// единственный способ, которым dry-run проверяет «что если» без
+// materialized view.
+type Interval struct {
+	ID           int64
+	SubscriberID int64
+	Kind         string
+	DelegateTo   *int64
+	ValidFrom    time.Time
+	ValidUntil   *time.Time
+	CreatedAt    time.Time
+}
+
+// ResolveFromIntervals — чистая (без обращения к БД) версия резолвинга:
+// на входе уже загруженные интервалы (реальные и, опционально,
+// гипотетические) и момент времени at. Resolve ниже — тонкая обёртка,
+// которая сама загружает интервалы, покрывающие at, и зовёт эту
+// функцию; coverage.Sweep вызывает её напрямую в цикле по нескольким
+// моментам на одном и том же заранее загруженном наборе интервалов.
+func ResolveFromIntervals(intervals []Interval, subscriberIDs []int64, at time.Time) map[int64]Status {
+	result := make(map[int64]Status, len(subscriberIDs))
+	for _, id := range subscriberIDs {
+		result[id] = Status{Available: true}
+	}
+	best := make(map[int64]Interval)
+	for _, iv := range intervals {
+		if iv.ValidFrom.After(at) {
+			continue
+		}
+		if iv.ValidUntil != nil && !iv.ValidUntil.After(at) {
+			continue
+		}
+		if current, exists := best[iv.SubscriberID]; !exists || outranks(iv, current) {
+			best[iv.SubscriberID] = iv
+		}
+	}
+	for subscriberID, iv := range best {
+		rule, ok := priorities[iv.Kind]
+		if !ok {
+			continue
+		}
+		result[subscriberID] = Status{Available: rule.available, Kind: iv.Kind, DelegateTo: iv.DelegateTo}
+	}
+	return result
 }
 
 // Resolve возвращает доступность каждого из subscriberIDs на момент at.
@@ -66,15 +108,11 @@ type intervalRow struct {
 // это явно сохраняет сегодняшнее неявное поведение как базовый случай,
 // а не молчаливую дыру в данных.
 func Resolve(ctx context.Context, dbc dbTx, subscriberIDs []int64, at time.Time) (map[int64]Status, error) {
-	result := make(map[int64]Status, len(subscriberIDs))
-	for _, id := range subscriberIDs {
-		result[id] = Status{Available: true}
-	}
 	if len(subscriberIDs) == 0 {
-		return result, nil
+		return map[int64]Status{}, nil
 	}
 	rows, err := dbc.Query(ctx, `
-		SELECT id, subscriber_id, kind, delegate_to_subscriber_id, created_at
+		SELECT id, subscriber_id, kind, delegate_to_subscriber_id, valid_from, valid_until, created_at
 		FROM employee_availability
 		WHERE subscriber_id = ANY($1) AND valid_from <= $2 AND (valid_until IS NULL OR valid_until > $2)`,
 		subscriberIDs, at)
@@ -82,37 +120,27 @@ func Resolve(ctx context.Context, dbc dbTx, subscriberIDs []int64, at time.Time)
 		return nil, err
 	}
 	defer rows.Close()
-	best := make(map[int64]intervalRow)
+	var intervals []Interval
 	for rows.Next() {
-		var subscriberID int64
-		var candidate intervalRow
-		if err := rows.Scan(&candidate.id, &subscriberID, &candidate.kind, &candidate.delegateTo, &candidate.createdAt); err != nil {
+		var iv Interval
+		if err := rows.Scan(&iv.ID, &iv.SubscriberID, &iv.Kind, &iv.DelegateTo, &iv.ValidFrom, &iv.ValidUntil, &iv.CreatedAt); err != nil {
 			return nil, err
 		}
-		if current, exists := best[subscriberID]; !exists || outranks(candidate, current) {
-			best[subscriberID] = candidate
-		}
+		intervals = append(intervals, iv)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for subscriberID, candidate := range best {
-		rule, ok := priorities[candidate.kind]
-		if !ok {
-			continue
-		}
-		result[subscriberID] = Status{Available: rule.available, Kind: candidate.kind, DelegateTo: candidate.delegateTo}
-	}
-	return result, nil
+	return ResolveFromIntervals(intervals, subscriberIDs, at), nil
 }
 
-func outranks(candidate, current intervalRow) bool {
-	candidateRank, currentRank := priorities[candidate.kind].rank, priorities[current.kind].rank
+func outranks(candidate, current Interval) bool {
+	candidateRank, currentRank := priorities[candidate.Kind].rank, priorities[current.Kind].rank
 	if candidateRank != currentRank {
 		return candidateRank > currentRank
 	}
-	if !candidate.createdAt.Equal(current.createdAt) {
-		return candidate.createdAt.After(current.createdAt)
+	if !candidate.CreatedAt.Equal(current.CreatedAt) {
+		return candidate.CreatedAt.After(current.CreatedAt)
 	}
-	return candidate.id > current.id
+	return candidate.ID > current.ID
 }

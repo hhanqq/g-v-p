@@ -286,6 +286,17 @@ export interface ChangeHistoryItem {
   after_json: string;
 }
 
+// Раздел «Использование ИИ» — умная маршрутизация на основе истории:
+// подсказка по подписке для сотрудника без подписок, построенная на
+// реальном паттерне подписок коллег из тех же групп.
+export interface SubscriptionSuggestion {
+  subsidiary: string | null;
+  service_id: string | null;
+  priority_threshold: string | null;
+  peer_count: number;
+  explanation: string;
+}
+
 export interface ChangeHistoryField {
   label: string;
   kind: "string" | "datetime";

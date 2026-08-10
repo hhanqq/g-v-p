@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/planner"
 )
 
 type Server struct {
@@ -29,6 +30,7 @@ type Server struct {
 	staticDir  string
 	sessions   *SessionManager
 	clickhouse clickhouse.Conn
+	ollama     *planner.OllamaClient
 }
 
 func (server *Server) UseSessions(sessions *SessionManager) { server.sessions = sessions }
@@ -39,6 +41,14 @@ func (server *Server) UseSessions(sessions *SessionManager) { server.sessions = 
 // не зависит от ClickHouse, только /api/change-history/search вернёт
 // понятную 503 вместо паники на nil-указателе.
 func (server *Server) UseClickHouse(conn clickhouse.Conn) { server.clickhouse = conn }
+
+// UseOllama подключает опциональную локальную LLM для формулировки
+// подсказки «умная маршрутизация на основе истории» (раздел
+// «Использование ИИ»). Не установлен/недоступен — не авария: сама
+// подсказка (реальный SQL-запрос к истории подписок коллег) всё равно
+// показывается, только шаблонной фразой вместо ИИ-формулировки — раздел
+// И5, тот же контракт деградации, что у всех остальных ИИ-сценариев.
+func (server *Server) UseOllama(client *planner.OllamaClient) { server.ollama = client }
 
 func New(pool *pgxpool.Pool, demoURL, staticDir string) (*Server, error) {
 	target, err := url.Parse(demoURL)
@@ -141,6 +151,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/employees/") {
 		server.withAuth(response, request, server.employeeHistory)
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/subscription-suggestion") && strings.HasPrefix(path, "/api/employees/") {
+		server.withAuth(response, request, server.employeeSubscriptionSuggestion)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/employees/") {

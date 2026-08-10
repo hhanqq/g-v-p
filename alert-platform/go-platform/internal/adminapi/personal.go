@@ -35,6 +35,7 @@ type cabinetView struct {
 	Subsidiaries  []string
 	Services      []cabinetOption
 	Priorities    []string
+	Suggestion    *SubscriptionSuggestion
 }
 
 var cabinetTemplate = template.Must(template.New("cabinet").Parse(`<!doctype html>
@@ -53,6 +54,15 @@ select{padding:8px;border-radius:6px;background:#1e293b;color:#e2e8f0;border:1px
 {{range .Subscriptions}}<li>{{.Description}} <form method="post" action="unsubscribe/{{.ID}}?token={{$.Token}}" style="display:inline"><button type="submit">Отписаться</button></form></li>
 {{else}}<li class="muted">Подписок нет — уведомления по этому логину приходить не будут.</li>{{end}}
 </ul>
+{{if .Suggestion}}<div class="panel">
+<b>Рекомендация на основе истории</b><br>
+<span class="muted">{{.Suggestion.Explanation}}</span>
+<form method="post" action="subscribe?token={{.Token}}" style="margin-top:8px">
+<input type="hidden" name="subsidiary" value="{{.Suggestion.SubsidiaryValue}}">
+<input type="hidden" name="service_id" value="{{.Suggestion.ServiceIDValue}}">
+<input type="hidden" name="priority_threshold" value="{{.Suggestion.PriorityValue}}">
+<button type="submit">Подписаться по рекомендации</button>
+</form></div>{{end}}
 <h3>Добавить подписку</h3>
 <form class="add panel" method="post" action="subscribe?token={{.Token}}">
 <label>Филиал<br><select name="subsidiary"><option value="">— любой —</option>{{range .Subsidiaries}}<option value="{{.}}">{{.}}</option>{{end}}</select></label>
@@ -172,10 +182,15 @@ func (server *Server) renderPersonalCabinet(response http.ResponseWriter, reques
 		subscriptions = append(subscriptions, cabinetSubscription{ID: id, Description: strings.Join(parts, ", ")})
 	}
 	rows.Close()
+	var suggestion *SubscriptionSuggestion
+	if len(subscriptions) == 0 {
+		suggestion, _ = server.suggestSubscription(request.Context(), subscriberID)
+	}
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = cabinetTemplate.Execute(response, cabinetView{
 		Username: username, Token: url.QueryEscape(request.URL.Query().Get("token")), Subscriptions: subscriptions,
 		Subsidiaries: subsidiaries, Services: services, Priorities: []string{"P0", "P1", "P2", "P3"},
+		Suggestion: suggestion,
 	})
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/adminapi"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/planner"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -43,6 +44,19 @@ func main() {
 		} else {
 			handler.UseClickHouse(chConn)
 		}
+	}
+	// Ollama — опциональная локальная LLM для «умная маршрутизация на
+	// основе истории» (раздел «Использование ИИ»): формулирует подсказку
+	// по подписке для нового сотрудника. Не задан OLLAMA_URL — подсказка
+	// всё равно показывается (реальный SQL к истории подписок коллег),
+	// просто шаблонной фразой вместо ИИ-формулировки. 20с — не мгновенно,
+	// но ограничено: модель log-reader (30B) при холодном старте отвечает
+	// ~30-40с (см. память проекта), при уже прогретой (keep_alive: 30m в
+	// OllamaClient.Ask, вызов остальными ИИ-сценариями держит её тёплой)
+	// — единицы секунд. Раздел И5: любой таймаут — деградация к шаблону,
+	// не ошибка.
+	if ollamaURL := os.Getenv("OLLAMA_URL"); ollamaURL != "" {
+		handler.UseOllama(planner.NewOllamaClient(ollamaURL, valueOr("OLLAMA_MODEL", "log-reader"), "", 35*time.Second))
 	}
 	handler.UseSessions(adminapi.NewSessionManager(
 		adminapi.NewLDAPAuthenticator(

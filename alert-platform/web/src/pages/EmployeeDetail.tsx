@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, ChangeHistoryItem, EmployeeDetail as EmployeeDetailType } from "../api";
+import { api, ChangeHistoryItem, EmployeeDetail as EmployeeDetailType, SubscriptionSuggestion } from "../api";
 import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
 
 const NOTIFICATION_TYPE_LABEL: Record<string, string> = {
@@ -38,6 +38,12 @@ export default function EmployeeDetail() {
   const { data: history } = useQuery<ChangeHistoryItem[]>({
     queryKey: ["employee-history", id],
     queryFn: () => api.get<ChangeHistoryItem[]>(`/employees/${id}/history`),
+  });
+
+  const { data: suggestion } = useQuery<SubscriptionSuggestion | null>({
+    queryKey: ["employee-subscription-suggestion", id],
+    queryFn: () => api.get<SubscriptionSuggestion | null>(`/employees/${id}/subscription-suggestion`),
+    enabled: !!data && data.subscriptions.length === 0,
   });
 
   async function setStatus(status: string) {
@@ -195,6 +201,18 @@ export default function EmployeeDetail() {
             </li>
           ))}
         </ul>
+        {data.subscriptions.length === 0 && suggestion && (
+          <div className="mt-3 rounded-lg border border-accent/30 bg-accent/10 p-3">
+            <div className="text-xs font-semibold uppercase tracking-wide text-accent">Рекомендация ИИ на основе истории</div>
+            <p className="mt-1 text-sm">{suggestion.explanation}</p>
+            <p className="mt-1 text-xs text-muted">
+              {suggestion.subsidiary ?? "любой филиал"} · {suggestion.service_id ?? "любой сервис"} ·{" "}
+              {suggestion.priority_threshold ? `приоритет ≤ ${suggestion.priority_threshold}` : "любой приоритет"}
+              {" · по "}{suggestion.peer_count}{" "}
+              {suggestion.peer_count === 1 ? "коллеге из групп" : "коллегам из групп"}
+            </p>
+          </div>
+        )}
       </Card>
 
       <Card>

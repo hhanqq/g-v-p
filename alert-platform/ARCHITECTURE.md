@@ -68,7 +68,7 @@ MinIO. Раздел 7 ниже.
 | PostgreSQL | PostgreSQL 16 | Очередь-как-БД, transactional outbox, WORM-журнал сигналов, CMDB, подписки, история |
 | Delivery planner | Go 1.25, pgx | Маршрутизация, шаблоны, локальный Ollama и подготовка команд `DeliveryCommand v1` |
 | Delivery TrueConf | Python, `python-trueconf-bot` | Vendor SDK: входящие команды/reply-ACK, создание чата, отправка, retry/backoff и сохранение provider `chat_id/message_id` |
-| Ollama | Открытые веса (self-hosted) | Пять ИИ-сценариев (раздел 4 ниже) — работает локально, без внешних API |
+| Ollama | Открытые веса (self-hosted) | Семь ИИ-сценариев (раздел 5 ниже) — работает локально, без внешних API |
 | Admin Console | Go API + React SPA | Go раздаёт SPA, выполняет LDAP session auth, обслуживает admin API и token-based личный кабинет; старые HTML URL перенаправляются на SPA |
 | Demo Runner | Python/FastAPI, internal-only | Только синтетический datagen и живые Ollama self-tests; не обслуживает HTML/авторизацию и не участвует в production-тракте |
 | TrueConf Server | TrueConf | Обязательный корпоративный канал доставки (кейс, п.2 условий) |
@@ -76,6 +76,9 @@ MinIO. Раздел 7 ниже.
 | Redpanda | Kafka-совместимая шина, self-hosted | Транспорт для потока изменений (`change_events.v1`); никогда не участвует в основном тракте приёма/доставки |
 | ClickHouse | Открытый код, self-hosted (изначально Яндекс) | Аналитическое хранилище для low-code поиска по истории изменений |
 | MinIO | S3-совместимое хранилище, open-source | Опциональный сырой архив `Signal` для долгосрочного хранения/ML/RAG |
+| PostgreSQL-реплика | PostgreSQL 16, async streaming replica | Резервная копия «горячего» состояния (не read-scaling — приложение её не запрашивает); ручной `pg_ctl promote`, раздел «Отказоустойчивость» `INFRASTRUCTURE.md` |
+| GLAuth (LDAP) | Open-source LDAP-сервер, self-hosted | Демо-каталог сотрудников для LDAP/AD-логина admin-console; в проде заменяется реальным AD/LDAP без изменения кода авторизации |
+| deprovision-worker | Python, `python-ldap` | Периодическая сверка LDAP-каталога (`services/deprovision/main.py`, логика — `packages/common/deprovision.py`), автоотключение уволенных сотрудников от рассылок — изолирован от доменного pipeline, недоступность LDAP не влияет на обработку событий |
 
 ## 2. Поток данных (9 стадий конвейера)
 

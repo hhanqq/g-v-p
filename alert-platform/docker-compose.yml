@@ -298,7 +298,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 20
-    mem_limit: 1g
+    # 1g изначально казался запасом (после старта простой ClickHouse
+    # занимал ~150 МиБ), но под реальной нагрузкой (фоновые merge'и
+    # MergeTree, кэши) RSS вырос за 1 ГиБ и cgroup убивал процесс
+    # (`dmesg`: OOM-killer, anon-rss+file-rss ≈ 1,17 ГиБ) — найдено
+    # живьём аудитом инфраструктуры 2026-08-10. Хост несёт весь стек
+    # (11+ сервисов) на 62 ГиБ RAM при обычном использовании < 6 ГиБ,
+    # поэтому 2g — реальный запас, а не переоценка.
+    mem_limit: 2g
 
   clickhouse-migrate:
     # Одноразовое применение database/clickhouse_migrations/*.sql — тот

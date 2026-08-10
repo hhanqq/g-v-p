@@ -31,7 +31,10 @@ func Parse(raw string) (*Graph, bool) {
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil || len(payload.Nodes) == 0 {
 		return nil, false
 	}
-	allowed := map[string]bool{"condition": true, "notify": true, "wait": true, "ack_check": true, "subscription_check": true}
+	allowed := map[string]bool{
+		"condition": true, "notify": true, "wait": true, "ack_check": true,
+		"subscription_check": true, "availability_check": true,
+	}
 	nodes := make(map[string]Node, len(payload.Nodes))
 	incoming := make(map[string]int, len(payload.Nodes))
 	connections := make(map[string][]Edge, len(payload.Nodes))
@@ -66,7 +69,8 @@ func Parse(raw string) (*Graph, bool) {
 	edges := make(map[string]map[string]*string, len(nodes))
 	for id, node := range nodes {
 		out := connections[id]
-		if node.Type == "ack_check" || node.Type == "subscription_check" {
+		switch node.Type {
+		case "ack_check", "subscription_check", "availability_check":
 			edges[id] = map[string]*string{"yes": nil, "no": nil}
 			for _, edge := range out {
 				if edge.SourceHandle == nil || (*edge.SourceHandle != "yes" && *edge.SourceHandle != "no") || edges[id][*edge.SourceHandle] != nil {
@@ -75,7 +79,28 @@ func Parse(raw string) (*Graph, bool) {
 				target := edge.Target
 				edges[id][*edge.SourceHandle] = &target
 			}
-		} else {
+		case "notify":
+			// Двухключевая карта: ребро без sourceHandle — "default" (все
+			// существующие сохранённые графы парсятся без изменений), ребро
+			// с sourceHandle="no_recipient" — опциональная явная ветка
+			// эскалации, когда узел резолвит ноль получателей (см.
+			// internal/planner/automation.go) вместо тихого пропуска.
+			edges[id] = map[string]*string{"default": nil, "no_recipient": nil}
+			for _, edge := range out {
+				handle := "default"
+				if edge.SourceHandle != nil {
+					if *edge.SourceHandle != "no_recipient" {
+						return nil, false
+					}
+					handle = "no_recipient"
+				}
+				if edges[id][handle] != nil {
+					return nil, false
+				}
+				target := edge.Target
+				edges[id][handle] = &target
+			}
+		default:
 			if len(out) > 1 {
 				return nil, false
 			}
@@ -164,7 +189,7 @@ func Advance(current string, enteredAt time.Time, graph *Graph, problemStatus st
 				return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt, Trace: trace}
 			}
 			nodeID, enteredAt = *next, now
-		case "ack_check", "subscription_check":
+		case "ack_check", "subscription_check", "availability_check":
 			branch := "no"
 			if facts[nodeID] {
 				branch = "yes"

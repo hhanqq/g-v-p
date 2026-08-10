@@ -248,3 +248,74 @@ func TestAdvanceTraceRecordsElapsedWait(t *testing.T) {
 		}
 	}
 }
+
+// ---------- Parse/Advance: availability_check, notify.no_recipient ----------
+
+func TestParseAcceptsAvailabilityCheckLikeADecisionNode(t *testing.T) {
+	raw := `{"nodes":[{"id":"c","type":"condition","data":{}},{"id":"a","type":"availability_check","data":{}},{"id":"yes","type":"notify","data":{}},{"id":"no","type":"notify","data":{}}],"edges":[{"source":"c","target":"a"},{"source":"a","target":"yes","sourceHandle":"yes"},{"source":"a","target":"no","sourceHandle":"no"}]}`
+	graph, ok := Parse(raw)
+	if !ok {
+		t.Fatal("availability_check should parse like ack_check/subscription_check")
+	}
+	if *graph.Edges["a"]["yes"] != "yes" || *graph.Edges["a"]["no"] != "no" {
+		t.Fatal("availability_check yes/no edges not wired correctly")
+	}
+}
+
+func TestParseNotifyDefaultEdgeBackwardCompat(t *testing.T) {
+	// Существующий сохранённый граф: единственное ребро notify без
+	// sourceHandle — должно парситься как "default", без изменений.
+	raw := `{"nodes":[{"id":"c","type":"condition","data":{}},{"id":"n","type":"notify","data":{}}],"edges":[{"source":"c","target":"n"}]}`
+	graph, ok := Parse(raw)
+	if !ok {
+		t.Fatal("plain notify edge without sourceHandle should still parse")
+	}
+	if *graph.Edges["c"]["default"] != "n" {
+		t.Fatal("root->notify default edge not wired")
+	}
+	if graph.Edges["n"]["default"] != nil || graph.Edges["n"]["no_recipient"] != nil {
+		t.Fatal("terminal notify node should have both edges nil")
+	}
+}
+
+func TestParseNotifyAcceptsNoRecipientEdge(t *testing.T) {
+	raw := `{"nodes":[{"id":"c","type":"condition","data":{}},{"id":"n","type":"notify","data":{}},{"id":"ok","type":"notify","data":{}},{"id":"escalate","type":"notify","data":{}}],"edges":[{"source":"c","target":"n"},{"source":"n","target":"ok"},{"source":"n","target":"escalate","sourceHandle":"no_recipient"}]}`
+	graph, ok := Parse(raw)
+	if !ok {
+		t.Fatal("notify with both default and no_recipient edges should parse")
+	}
+	if *graph.Edges["n"]["default"] != "ok" || *graph.Edges["n"]["no_recipient"] != "escalate" {
+		t.Fatalf("notify edges wired incorrectly: %+v", graph.Edges["n"])
+	}
+}
+
+func TestParseNotifyRejectsUnknownHandle(t *testing.T) {
+	raw := `{"nodes":[{"id":"c","type":"condition","data":{}},{"id":"n","type":"notify","data":{}},{"id":"x","type":"notify","data":{}}],"edges":[{"source":"c","target":"n"},{"source":"n","target":"x","sourceHandle":"maybe"}]}`
+	if _, ok := Parse(raw); ok {
+		t.Fatal("notify edge with an unknown sourceHandle should be rejected")
+	}
+}
+
+func TestParseNotifyRejectsDuplicateNoRecipientEdges(t *testing.T) {
+	raw := `{"nodes":[{"id":"c","type":"condition","data":{}},{"id":"n","type":"notify","data":{}},{"id":"x","type":"notify","data":{}},{"id":"y","type":"notify","data":{}}],"edges":[{"source":"c","target":"n"},{"source":"n","target":"x","sourceHandle":"no_recipient"},{"source":"n","target":"y","sourceHandle":"no_recipient"}]}`
+	if _, ok := Parse(raw); ok {
+		t.Fatal("two no_recipient edges from the same notify node should be rejected")
+	}
+}
+
+func TestAdvanceAvailabilityCheckBranches(t *testing.T) {
+	raw := `{"nodes":[{"id":"cond","type":"condition","data":{}},{"id":"a","type":"availability_check","data":{}},{"id":"yes-notify","type":"notify","data":{"employee_id":1}},{"id":"no-notify","type":"notify","data":{"employee_id":2}}],"edges":[{"source":"cond","target":"a"},{"source":"a","target":"yes-notify","sourceHandle":"yes"},{"source":"a","target":"no-notify","sourceHandle":"no"}]}`
+	graph, ok := Parse(raw)
+	if !ok {
+		t.Fatal("failed to parse availability_check fixture graph")
+	}
+	t0 := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
+	out := Advance("cond", t0, graph, "OPEN", map[string]bool{"a": true}, t0)
+	if out.Kind != "notify" || out.Step == nil || out.Step.ID != "yes-notify" {
+		t.Fatalf("expected availability_check(true) to take the yes branch: %+v", out)
+	}
+	out = Advance("cond", t0, graph, "OPEN", map[string]bool{"a": false}, t0)
+	if out.Kind != "notify" || out.Step == nil || out.Step.ID != "no-notify" {
+		t.Fatalf("expected availability_check(false) to take the no branch: %+v", out)
+	}
+}

@@ -2,11 +2,13 @@ package planner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/availability"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/scenario"
 	"github.com/jackc/pgx/v5"
 )
@@ -200,10 +202,35 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 					return err
 				}
 			}
+		case "availability_check":
+			candidates, err := planner.notifyCandidates(ctx, node.Data)
+			if err != nil {
+				return err
+			}
+			statuses, err := availability.Resolve(ctx, planner.pool, candidateIDs(candidates), now)
+			if err != nil {
+				return err
+			}
+			available := false
+			for _, status := range statuses {
+				if status.Available {
+					available = true
+					break
+				}
+			}
+			facts[id] = available
 		}
 	}
 	outcome := scenario.Advance(current, enteredAt, graph, problemStatus(problem), facts, now)
-	if err := recordScenarioSteps(ctx, tx, runID, scenarioID, runVersion, problemID, outcome.Trace, now); err != nil {
+	// Ветка notify-узла (default/no_recipient) решается ниже, после
+	// резолвинга получателей — Advance() ничего не знает о нём и всегда
+	// кладёт в трассу "default". Пишем все шаги, КРОМЕ последнего, если
+	// это notify (он допишется в case "notify" ниже с настоящей веткой).
+	trace := outcome.Trace
+	if outcome.Kind == "notify" && len(trace) > 0 {
+		trace = trace[:len(trace)-1]
+	}
+	if err := recordScenarioSteps(ctx, tx, runID, scenarioID, runVersion, problemID, trace, now); err != nil {
 		return err
 	}
 	switch outcome.Kind {
@@ -218,33 +245,46 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		}
 		return tx.Commit(ctx)
 	case "notify":
-		nextStatus := "running"
-		if outcome.CurrentNodeID == "" {
-			nextStatus = "done"
+		candidates, err := planner.notifyCandidates(ctx, outcome.Step.Data)
+		if err != nil {
+			return err
 		}
-		groupID := int64(number(outcome.Step.Data["group_id"]))
-		var usernames []string
-		if groupID != 0 {
-			usernames, err = planner.groupMemberUsernames(ctx, groupID)
-			if err != nil {
-				return err
-			}
-		} else if employeeID := int64(number(outcome.Step.Data["employee_id"])); employeeID != 0 {
-			var username string
-			if err := tx.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username); err == nil {
-				usernames = []string{username}
-			} else if !errors.Is(err, pgx.ErrNoRows) {
-				return err
-			}
+		mode, _ := outcome.Step.Data["recipient_mode"].(string)
+		usernames, recipientsTrace, err := planner.selectNotifyRecipients(ctx, candidates, mode, now)
+		if err != nil {
+			return err
 		}
+		recipientsJSON, _ := json.Marshal(recipientsTrace)
+
 		if len(usernames) == 0 {
-			// Раньше состояние продвигалось (и notified_count рос) ещё до
-			// резолвинга получателя, так что отсутствие подписчика тонуло
-			// молча — прогон выглядел так, будто уведомил, хотя ни одной
-			// доставки не создавалось. Явную ветку графа для этого случая
-			// добавляет отдельный узел (см. следующий этап); здесь —
-			// минимум: не считать это отправкой и оставить видимый след.
-			if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt); err != nil {
+			if target := graph.Edges[outcome.Step.ID]["no_recipient"]; target != nil {
+				// Явная ветка эскалации подключена — переходим на неё как
+				// на обычный переход между узлами: без инкремента
+				// notified_count и без доставки на этом шаге (ничего не
+				// отправлено, это узел "нет получателя", а не "отправлено").
+				if _, err = tx.Exec(ctx, `INSERT INTO scenario_run_steps(run_id,scenario_id,scenario_version,problem_id,node_id,node_type,branch,recipients_json,entered_at,created_at) VALUES($1,$2,$3,$4,$5,'notify','no_recipient',$6,$7,$7)`,
+					runID, scenarioID, runVersion, problemID, outcome.Step.ID, string(recipientsJSON), now); err != nil {
+					return err
+				}
+				nextStatus := "running"
+				if *target == "" {
+					nextStatus = "done"
+				}
+				if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4 WHERE id=$1`, runID, nextStatus, *target, now); err != nil {
+					return err
+				}
+				return tx.Commit(ctx)
+			}
+			// Ребро эскалации не подключено — терминальный статус,
+			// отдельный от 'done', чтобы быть видимым в аналитике (Фаза 6),
+			// а не неотличимым от штатного завершения. Раньше состояние
+			// продвигалось молча и без этой разницы — прогон выглядел так,
+			// будто уведомил, хотя ни одной доставки не создавалось.
+			if _, err = tx.Exec(ctx, `INSERT INTO scenario_run_steps(run_id,scenario_id,scenario_version,problem_id,node_id,node_type,branch,recipients_json,entered_at,created_at) VALUES($1,$2,$3,$4,$5,'notify','no_recipient',$6,$7,$7)`,
+				runID, scenarioID, runVersion, problemID, outcome.Step.ID, string(recipientsJSON), now); err != nil {
+				return err
+			}
+			if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status='no_recipient',current_node_id=$2 WHERE id=$1`, runID, outcome.Step.ID); err != nil {
 				return err
 			}
 			if _, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES('scheduler','scenario_no_recipient',$1,$2,$3)`,
@@ -252,6 +292,15 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 				return err
 			}
 			return tx.Commit(ctx)
+		}
+
+		nextStatus := "running"
+		if outcome.CurrentNodeID == "" {
+			nextStatus = "done"
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO scenario_run_steps(run_id,scenario_id,scenario_version,problem_id,node_id,node_type,branch,recipients_json,entered_at,created_at) VALUES($1,$2,$3,$4,$5,'notify','default',$6,$7,$7)`,
+			runID, scenarioID, runVersion, problemID, outcome.Step.ID, string(recipientsJSON), now); err != nil {
+			return err
 		}
 		if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4,notified_count=notified_count+1 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt); err != nil {
 			return err
@@ -269,6 +318,130 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		return tx.Commit(ctx)
 	}
 	return tx.Commit(ctx)
+}
+
+// notifyCandidate — один кандидат в получатели notify-узла или
+// проверки availability_check: субъект, а не сразу решение — доступность
+// резолвится отдельно (internal/availability), здесь только "кто вообще
+// имеется в виду".
+type notifyCandidate struct {
+	id       int64
+	username string
+}
+
+func candidateIDs(candidates []notifyCandidate) []int64 {
+	ids := make([]int64, len(candidates))
+	for i, c := range candidates {
+		ids[i] = c.id
+	}
+	return ids
+}
+
+// notifyCandidates резолвит "кого вообще имеет в виду этот узел" —
+// явный упорядоченный список employee_ids (для first_available с
+// заданным вручную порядком), либо группу (порядок —
+// trueconf_username ASC, тот же самый, что уже отдаёт GET
+// /api/groups/{id}), либо одного employee_id. Только активные
+// подписчики — тот же контракт, что был у одиночного employee_id
+// раньше.
+func (planner *Planner) notifyCandidates(ctx context.Context, data map[string]any) ([]notifyCandidate, error) {
+	if raw, ok := data["employee_ids"].([]any); ok && len(raw) > 0 {
+		var candidates []notifyCandidate
+		for _, item := range raw {
+			id := int64(number(item))
+			if id == 0 {
+				continue
+			}
+			var username string
+			err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, id).Scan(&username)
+			if errors.Is(err, pgx.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			candidates = append(candidates, notifyCandidate{id: id, username: username})
+		}
+		return candidates, nil
+	}
+	if groupID := int64(number(data["group_id"])); groupID != 0 {
+		return planner.groupMemberCandidates(ctx, groupID)
+	}
+	if employeeID := int64(number(data["employee_id"])); employeeID != 0 {
+		var username string
+		err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return []notifyCandidate{{id: employeeID, username: username}}, nil
+	}
+	return nil, nil
+}
+
+func (planner *Planner) groupMemberCandidates(ctx context.Context, groupID int64) ([]notifyCandidate, error) {
+	rows, err := planner.pool.Query(ctx, `
+		SELECT subscriber.id, subscriber.trueconf_username
+		FROM group_members member
+		JOIN subscribers subscriber ON subscriber.id = member.subscriber_id
+		WHERE member.group_id = $1 AND subscriber.active = TRUE
+		ORDER BY subscriber.trueconf_username`, groupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var candidates []notifyCandidate
+	for rows.Next() {
+		var c notifyCandidate
+		if err := rows.Scan(&c.id, &c.username); err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, c)
+	}
+	return candidates, rows.Err()
+}
+
+// selectNotifyRecipients применяет recipient_mode к уже резолвленным
+// кандидатам и строит decision trace, который уходит в
+// scenario_run_steps.recipients_json — видимая причина выбора, не
+// только сам выбор.
+func (planner *Planner) selectNotifyRecipients(ctx context.Context, candidates []notifyCandidate, mode string, at time.Time) ([]string, map[string]any, error) {
+	if mode != "first_available" {
+		usernames := make([]string, len(candidates))
+		for i, c := range candidates {
+			usernames[i] = c.username
+		}
+		reason := "all"
+		if len(usernames) == 0 {
+			reason = "no_candidates"
+		}
+		return usernames, map[string]any{"selected": usernames, "reason": reason}, nil
+	}
+	statuses, err := availability.Resolve(ctx, planner.pool, candidateIDs(candidates), at)
+	if err != nil {
+		return nil, nil, err
+	}
+	candidateTrace := make([]map[string]any, 0, len(candidates))
+	var selected string
+	for _, c := range candidates {
+		status := statuses[c.id]
+		candidateTrace = append(candidateTrace, map[string]any{"username": c.username, "available": status.Available, "kind": status.Kind})
+		if status.Available && selected == "" {
+			selected = c.username
+		}
+	}
+	reason := "no_candidates"
+	var usernames []string
+	if len(candidates) > 0 {
+		reason = "no_available"
+	}
+	if selected != "" {
+		usernames = []string{selected}
+		reason = "first_available"
+	}
+	return usernames, map[string]any{"candidates": candidateTrace, "selected": usernames, "reason": reason}, nil
 }
 
 // recordScenarioSteps пишет трассу реально пройденных узлов (пусто для

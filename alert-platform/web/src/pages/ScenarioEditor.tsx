@@ -46,6 +46,9 @@ interface NotifyData {
   employee_label?: string;
   group_id?: number;
   group_label?: string;
+  employee_ids?: number[];
+  employee_labels?: string[];
+  recipient_mode?: "all" | "first_available";
 }
 
 interface WaitData {
@@ -65,7 +68,15 @@ interface SubscriptionCheckData {
   group_label?: string;
 }
 
-type StepData = ConditionData | NotifyData | WaitData | AckCheckData | SubscriptionCheckData;
+interface AvailabilityCheckData {
+  kind: "availability_check";
+  employee_id?: number;
+  employee_label?: string;
+  group_id?: number;
+  group_label?: string;
+}
+
+type StepData = ConditionData | NotifyData | WaitData | AckCheckData | SubscriptionCheckData | AvailabilityCheckData;
 
 function YesNoHandles() {
   return (
@@ -97,12 +108,26 @@ function ConditionNode({ data, selected }: NodeProps<ConditionData>) {
 }
 
 function NotifyNode({ data, selected }: NodeProps<NotifyData>) {
+  const target = data.employee_ids?.length
+    ? `список (${data.employee_ids.length}): ${(data.employee_labels ?? []).join(", ")}`
+    : data.group_label
+      ? `группа: ${data.group_label}`
+      : data.employee_label ?? "получатель не выбран";
   return (
     <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
       <Handle type="target" position={Position.Top} />
       <div className="mb-1 font-semibold text-fg">Уведомить</div>
-      <div className="text-muted">{data.group_label ? `группа: ${data.group_label}` : data.employee_label ?? "получатель не выбран"}</div>
-      <Handle type="source" position={Position.Bottom} />
+      <div className="text-muted">{target}</div>
+      {data.recipient_mode === "first_available" && <div className="mt-1 text-[10px] text-accent">первый доступный</div>}
+      {/* Первый handle без id — sourceHandle остаётся null, парсится сервером
+          как "default" (существующие сохранённые графы не ломаются).
+          Второй — явная ветка эскалации, когда получателей ноль. */}
+      <div className="mt-2 flex justify-between text-[10px] text-muted">
+        <span>отправлено ↓</span>
+        <span>→ нет получателя</span>
+      </div>
+      <Handle type="source" position={Position.Bottom} style={{ left: "25%" }} />
+      <Handle type="source" position={Position.Bottom} id="no_recipient" style={{ left: "75%" }} />
     </div>
   );
 }
@@ -140,12 +165,24 @@ function SubscriptionCheckNode({ data, selected }: NodeProps<SubscriptionCheckDa
   );
 }
 
+function AvailabilityCheckNode({ data, selected }: NodeProps<AvailabilityCheckData>) {
+  return (
+    <div className={`rounded-lg border bg-card px-3 py-2 text-xs ${selected ? "border-accent" : "border-border"}`}>
+      <Handle type="target" position={Position.Top} />
+      <div className="mb-1 font-semibold text-fg">Проверка доступности</div>
+      <div className="text-muted">{data.group_label ? `группа: ${data.group_label}` : data.employee_label ?? "есть хоть кто-то доступный"}</div>
+      <YesNoHandles />
+    </div>
+  );
+}
+
 const NODE_TYPES = {
   condition: ConditionNode,
   notify: NotifyNode,
   wait: WaitNode,
   ack_check: AckCheckNode,
   subscription_check: SubscriptionCheckNode,
+  availability_check: AvailabilityCheckNode,
 };
 
 let idCounter = 1;
@@ -159,6 +196,7 @@ function defaultDataFor(kind: StepData["kind"]): StepData {
   if (kind === "notify") return { kind: "notify" };
   if (kind === "ack_check") return { kind: "ack_check" };
   if (kind === "subscription_check") return { kind: "subscription_check" };
+  if (kind === "availability_check") return { kind: "availability_check" };
   return { kind: "wait", minutes: 30 };
 }
 
@@ -238,6 +276,37 @@ export default function ScenarioEditor() {
     setNodes((ns) =>
       ns.map((n) => (n.id === selectedId ? { ...n, data: { ...n.data, ...patch } as StepData } : n)),
     );
+  }
+
+  function addEmployeeToOrderedList(employeeId: number) {
+    if (!employeeId || !selectedNode || selectedNode.data.kind !== "notify") return;
+    const data = selectedNode.data;
+    const emp = employees?.find((x) => x.id === employeeId);
+    const ids = [...(data.employee_ids ?? []), employeeId];
+    const labels = [...(data.employee_labels ?? []), emp ? emp.full_name ?? emp.trueconf_username : String(employeeId)];
+    updateSelectedData({ employee_ids: ids, employee_labels: labels });
+  }
+
+  function moveEmployeeInOrderedList(index: number, direction: -1 | 1) {
+    if (!selectedNode || selectedNode.data.kind !== "notify") return;
+    const data = selectedNode.data;
+    const ids = [...(data.employee_ids ?? [])];
+    const labels = [...(data.employee_labels ?? [])];
+    const target = index + direction;
+    if (target < 0 || target >= ids.length) return;
+    [ids[index], ids[target]] = [ids[target], ids[index]];
+    [labels[index], labels[target]] = [labels[target], labels[index]];
+    updateSelectedData({ employee_ids: ids, employee_labels: labels });
+  }
+
+  function removeEmployeeFromOrderedList(index: number) {
+    if (!selectedNode || selectedNode.data.kind !== "notify") return;
+    const data = selectedNode.data;
+    const ids = [...(data.employee_ids ?? [])];
+    const labels = [...(data.employee_labels ?? [])];
+    ids.splice(index, 1);
+    labels.splice(index, 1);
+    updateSelectedData({ employee_ids: ids, employee_labels: labels });
   }
 
   function deleteSelected() {
@@ -330,6 +399,9 @@ export default function ScenarioEditor() {
         </button>
         <button onClick={() => addNode("subscription_check")} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-accent hover:text-white">
           + Проверка подписки
+        </button>
+        <button onClick={() => addNode("availability_check")} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-accent hover:text-white">
+          + Проверка доступности
         </button>
         <span className="mx-2 h-4 w-px bg-border" />
         <span className={`rounded px-2 py-0.5 text-xs ${status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-fg/10 text-muted"}`}>
@@ -439,12 +511,12 @@ export default function ScenarioEditor() {
 
           {selectedNode?.data.kind === "notify" && (
             <div className="space-y-3">
-              <div className="flex gap-3 text-xs">
+              <div className="flex flex-wrap gap-3 text-xs">
                 <label className="flex items-center gap-1.5">
                   <input
                     type="radio"
-                    checked={!selectedNode.data.group_id}
-                    onChange={() => updateSelectedData({ group_id: undefined, group_label: undefined })}
+                    checked={!selectedNode.data.group_id && !selectedNode.data.employee_ids}
+                    onChange={() => updateSelectedData({ group_id: undefined, group_label: undefined, employee_ids: undefined, employee_labels: undefined })}
                   />
                   Сотрудник
                 </label>
@@ -452,12 +524,75 @@ export default function ScenarioEditor() {
                   <input
                     type="radio"
                     checked={!!selectedNode.data.group_id}
-                    onChange={() => updateSelectedData({ employee_id: undefined, employee_label: undefined })}
+                    onChange={() => updateSelectedData({ employee_id: undefined, employee_label: undefined, employee_ids: undefined, employee_labels: undefined })}
                   />
                   Группа
                 </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    checked={!!selectedNode.data.employee_ids}
+                    onChange={() => updateSelectedData({ employee_id: undefined, employee_label: undefined, group_id: undefined, group_label: undefined, employee_ids: [], employee_labels: [] })}
+                  />
+                  Список по порядку
+                </label>
               </div>
-              {!selectedNode.data.group_id ? (
+              {selectedNode.data.employee_ids ? (
+                <div className="space-y-1.5">
+                  {(() => {
+                    const ids = selectedNode.data.kind === "notify" ? selectedNode.data.employee_ids ?? [] : [];
+                    const labels = selectedNode.data.kind === "notify" ? selectedNode.data.employee_labels ?? [] : [];
+                    return (
+                      <>
+                        {ids.length === 0 && <p className="text-xs text-muted">Список пуст — добавьте хотя бы одного сотрудника.</p>}
+                        {ids.map((empId, idx) => (
+                          <div key={`${empId}-${idx}`} className="flex items-center gap-1 rounded-md bg-bg px-2 py-1 text-xs">
+                            <span className="flex-1">
+                              {idx + 1}. {labels[idx] ?? empId}
+                            </span>
+                            <button
+                              disabled={idx === 0}
+                              onClick={() => moveEmployeeInOrderedList(idx, -1)}
+                              className="px-1 disabled:opacity-30"
+                              title="выше"
+                            >
+                              ↑
+                            </button>
+                            <button
+                              disabled={idx === ids.length - 1}
+                              onClick={() => moveEmployeeInOrderedList(idx, 1)}
+                              className="px-1 disabled:opacity-30"
+                              title="ниже"
+                            >
+                              ↓
+                            </button>
+                            <button onClick={() => removeEmployeeFromOrderedList(idx)} className="px-1 text-red-400" title="убрать">
+                              ×
+                            </button>
+                          </div>
+                        ))}
+                        <select
+                          value=""
+                          onChange={(e) => addEmployeeToOrderedList(Number(e.target.value))}
+                          className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                        >
+                          <option value="">+ добавить в список</option>
+                          {employees
+                            ?.filter((e) => !ids.includes(e.id))
+                            .map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.full_name ?? e.trueconf_username}
+                              </option>
+                            ))}
+                        </select>
+                      </>
+                    );
+                  })()}
+                  <p className="text-xs text-muted">
+                    Порядок задаёт очерёдность для режима «первый доступный» ниже — сверху приоритетнее.
+                  </p>
+                </div>
+              ) : !selectedNode.data.group_id ? (
                 <select
                   value={selectedNode.data.employee_id ?? ""}
                   onChange={(e) => {
@@ -493,7 +628,22 @@ export default function ScenarioEditor() {
                   ))}
                 </select>
               )}
-              <p className="text-xs text-muted">При выборе группы уведомление уходит всем её активным участникам.</p>
+              <div>
+                <label className="mb-1 block text-xs text-muted">Режим выбора получателя</label>
+                <select
+                  value={selectedNode.data.recipient_mode ?? "all"}
+                  onChange={(e) => updateSelectedData({ recipient_mode: e.target.value as NotifyData["recipient_mode"] })}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="all">Все (текущее поведение)</option>
+                  <option value="first_available">Первый доступный по календарю</option>
+                </select>
+              </div>
+              <p className="text-xs text-muted">
+                При выборе группы или «все» уведомление уходит всем активным получателям. «Первый доступный»
+                резолвит доступность каждого кандидата (карточка сотрудника, раздел «Доступность») и уведомляет
+                первого, кто сейчас доступен; если доступных нет — работает нижнее ребро «нет получателя».
+              </p>
             </div>
           )}
 
@@ -579,6 +729,69 @@ export default function ScenarioEditor() {
               <p className="text-xs text-muted">
                 «Да» — у выбранного сотрудника/группы (или хоть кого-то, если не выбран) реально сработала бы
                 доставка по текущим подпискам (раздел 8); «Нет» — иначе.
+              </p>
+            </div>
+          )}
+
+          {selectedNode?.data.kind === "availability_check" && (
+            <div className="space-y-3">
+              <div className="flex gap-3 text-xs">
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    checked={!selectedNode.data.group_id}
+                    onChange={() => updateSelectedData({ group_id: undefined, group_label: undefined })}
+                  />
+                  Сотрудник
+                </label>
+                <label className="flex items-center gap-1.5">
+                  <input
+                    type="radio"
+                    checked={!!selectedNode.data.group_id}
+                    onChange={() => updateSelectedData({ employee_id: undefined, employee_label: undefined })}
+                  />
+                  Группа
+                </label>
+              </div>
+              {!selectedNode.data.group_id ? (
+                <select
+                  value={selectedNode.data.employee_id ?? ""}
+                  onChange={(e) => {
+                    const emp = employees?.find((x) => x.id === Number(e.target.value));
+                    updateSelectedData({
+                      employee_id: emp?.id,
+                      employee_label: emp ? emp.full_name ?? emp.trueconf_username : undefined,
+                    });
+                  }}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="">любой доступный (есть хоть кто-то)</option>
+                  {employees?.map((e) => (
+                    <option key={e.id} value={e.id}>
+                      {e.full_name ?? e.trueconf_username}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <select
+                  value={selectedNode.data.group_id ?? ""}
+                  onChange={(e) => {
+                    const grp = groups?.find((x) => x.id === Number(e.target.value));
+                    updateSelectedData({ group_id: grp?.id, group_label: grp?.name });
+                  }}
+                  className="w-full rounded-md border border-border bg-bg px-2 py-1.5 text-sm"
+                >
+                  <option value="">не выбрана (проверка «есть хоть кто-то в группе»)</option>
+                  {groups?.map((g) => (
+                    <option key={g.id} value={g.id}>
+                      {g.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <p className="text-xs text-muted">
+                «Да» — у выбранного сотрудника/группы (или хоть кого-то, если не выбран) сейчас есть доступный
+                человек по календарю доступности (карточка сотрудника, раздел «Доступность»); «Нет» — иначе.
               </p>
             </div>
           )}

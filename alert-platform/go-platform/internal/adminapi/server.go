@@ -18,6 +18,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 )
 
 type Server struct {
@@ -729,6 +731,14 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 	actor, _ := user["username"].(string)
 	_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'set_availability',$2,$3,$4)`, actor, username, payload.Status, now)
 	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	if err := changelog.Record(request.Context(), tx, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "subscriber.set_availability",
+		ResourceType: "subscriber", ResourceID: strconv.FormatInt(id, 10),
+		After: map[string]any{"status": payload.Status, "valid_until": payload.ValidUntil, "note": payload.Note},
+	}); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}

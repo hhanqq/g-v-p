@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 )
 
 func (server *Server) handleLegacyRedirect(response http.ResponseWriter, request *http.Request, path string) bool {
@@ -148,6 +150,13 @@ func (server *Server) addSource(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'source_add',$2,$3,$4)`, actor, payload.Instance, "system="+payload.System+" site="+payload.Site, now)
+	if err == nil {
+		err = changelog.Record(request.Context(), tx, changelog.Event{
+			OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "source_instance.create",
+			ResourceType: "source_instance", ResourceID: strconv.FormatInt(id, 10),
+			After: map[string]any{"instance": payload.Instance, "system": payload.System, "site": payload.Site},
+		})
+	}
 	if err != nil || tx.Commit(request.Context()) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
@@ -199,7 +208,16 @@ func (server *Server) deleteSource(response http.ResponseWriter, request *http.R
 		return
 	}
 	now := time.Now().UTC()
-	if _, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'source_delete',$2,$3)`, actor, instance, now); err != nil || tx.Commit(request.Context()) != nil {
+	if _, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'source_delete',$2,$3)`, actor, instance, now); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	err = changelog.Record(request.Context(), tx, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "source_instance.delete",
+		ResourceType: "source_instance", ResourceID: strconv.FormatInt(id, 10),
+		Before: map[string]any{"instance": instance},
+	})
+	if err != nil || tx.Commit(request.Context()) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}

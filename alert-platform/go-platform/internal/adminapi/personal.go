@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 )
 
 type cabinetSubscription struct {
@@ -206,6 +208,13 @@ func (server *Server) subscribePersonal(response http.ResponseWriter, request *h
 		detail := "subsidiary=" + valueOrStar(subsidiary) + " service=" + valueOrStar(serviceID) + " priority<=" + valueOrStar(priority)
 		_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,detail,created_at) VALUES($1,'subscribe',$2,$3)`, username, detail, now)
 	}
+	if err == nil {
+		err = changelog.Record(request.Context(), tx, changelog.Event{
+			OccurredAt: now, Actor: username, ActorRole: "user", Action: "subscription.create",
+			ResourceType: "subscription", ResourceID: strconv.FormatInt(subscriberID, 10),
+			After: map[string]any{"subsidiary": subsidiary, "service_id": serviceID, "priority_threshold": priority},
+		})
+	}
 	if err != nil || tx.Commit(request.Context()) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
@@ -239,6 +248,13 @@ func (server *Server) unsubscribePersonal(response http.ResponseWriter, request 
 	if err == nil {
 		now := time.Now().UTC()
 		_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,detail,created_at) VALUES($1,'unsubscribe',$2,$3)`, username, "subsidiary="+nullOrStar(subsidiary)+" service="+nullOrStar(serviceID), now)
+		if err == nil {
+			err = changelog.Record(request.Context(), tx, changelog.Event{
+				OccurredAt: now, Actor: username, ActorRole: "user", Action: "subscription.delete",
+				ResourceType: "subscription", ResourceID: strconv.FormatInt(subscriberID, 10),
+				Before: map[string]any{"subscription_id": id, "subsidiary": nullableString(subsidiary), "service_id": nullableString(serviceID)},
+			})
+		}
 	}
 	if err != nil || tx.Commit(request.Context()) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")

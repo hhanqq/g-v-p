@@ -442,6 +442,28 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
+class ChangeEvent(Base):
+    """История изменений (0011_change_events.sql) — структурированный
+    before/after снимок поверх AuditLog, читается картой объекта/
+    сотрудника и relay'ится Go-процессом changelog-worker в Kafka/
+    ClickHouse для low-code поиска. Python-сторона только пишет
+    Postgres — Kafka-клиента здесь нет и не будет (CLAUDE.md: новая
+    runtime-функциональность в основном тракте — только на Go)."""
+    __tablename__ = "change_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    actor: Mapped[str] = mapped_column(String(128))
+    actor_role: Mapped[str] = mapped_column(String(32))
+    action: Mapped[str] = mapped_column(String(64))
+    resource_type: Mapped[str] = mapped_column(String(64), index=True)
+    resource_id: Mapped[str] = mapped_column(String(256))
+    before_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    after_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    result: Mapped[str] = mapped_column(String(16), default="success")
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 # --- Платформа, Этап 1: доступность, SLA, сценарии --------------------------
 
 class EmployeeAvailability(Base):

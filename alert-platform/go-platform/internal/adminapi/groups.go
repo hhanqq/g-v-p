@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 )
 
 // routeGroups обрабатывает /api/groups и вложенные под-ресурсы
@@ -162,6 +164,13 @@ func (server *Server) createGroup(response http.ResponseWriter, request *http.Re
 	if err == nil {
 		_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'create_group',$2,$3)`, actor, name, now)
 	}
+	if err == nil {
+		err = changelog.Record(request.Context(), tx, changelog.Event{
+			OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.create",
+			ResourceType: "group", ResourceID: strconv.FormatInt(id, 10),
+			After: map[string]any{"name": name, "description": payload.Description},
+		})
+	}
 	if err != nil || tx.Commit(request.Context()) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
@@ -253,10 +262,14 @@ func (server *Server) updateGroup(response http.ResponseWriter, request *http.Re
 	}
 	actor, _ := user["username"].(string)
 	now := time.Now().UTC()
+	var beforeName string
+	var beforeDescription sql.NullString
+	_ = server.pool.QueryRow(request.Context(), `SELECT name,description FROM groups WHERE id=$1`, groupID).Scan(&beforeName, &beforeDescription)
 	var name string
+	var description sql.NullString
 	err := server.pool.QueryRow(request.Context(), `
-		UPDATE groups SET name=COALESCE(NULLIF($2,''),name),description=COALESCE($3,description) WHERE id=$1 RETURNING name`,
-		groupID, valueOrEmpty(payload.Name), payload.Description).Scan(&name)
+		UPDATE groups SET name=COALESCE(NULLIF($2,''),name),description=COALESCE($3,description) WHERE id=$1 RETURNING name,description`,
+		groupID, valueOrEmpty(payload.Name), payload.Description).Scan(&name, &description)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(response, http.StatusNotFound, "Группа не найдена")
 		return
@@ -266,6 +279,12 @@ func (server *Server) updateGroup(response http.ResponseWriter, request *http.Re
 		return
 	}
 	_, _ = server.pool.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'update_group',$2,$3)`, actor, name, now)
+	_ = changelog.Record(request.Context(), server.pool, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.update",
+		ResourceType: "group", ResourceID: strconv.FormatInt(groupID, 10),
+		Before: map[string]any{"name": beforeName, "description": nullableString(beforeDescription)},
+		After:  map[string]any{"name": name, "description": nullableString(description)},
+	})
 	writeJSON(response, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -283,6 +302,11 @@ func (server *Server) deleteGroup(response http.ResponseWriter, request *http.Re
 		return
 	}
 	_, _ = server.pool.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'delete_group',$2,$3)`, actor, name, now)
+	_ = changelog.Record(request.Context(), server.pool, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.delete",
+		ResourceType: "group", ResourceID: strconv.FormatInt(groupID, 10),
+		Before: map[string]any{"name": name},
+	})
 	writeJSON(response, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -309,6 +333,11 @@ func (server *Server) addGroupMember(response http.ResponseWriter, request *http
 	}
 	_, _ = server.pool.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'add_group_member',$2,$3,$4)`,
 		actor, strconv.FormatInt(groupID, 10), strconv.FormatInt(*payload.SubscriberID, 10), now)
+	_ = changelog.Record(request.Context(), server.pool, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.add_member",
+		ResourceType: "group", ResourceID: strconv.FormatInt(groupID, 10),
+		After: map[string]any{"subscriber_id": *payload.SubscriberID},
+	})
 	writeJSON(response, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -322,6 +351,11 @@ func (server *Server) removeGroupMember(response http.ResponseWriter, request *h
 	}
 	_, _ = server.pool.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'remove_group_member',$2,$3,$4)`,
 		actor, strconv.FormatInt(groupID, 10), strconv.FormatInt(subscriberID, 10), now)
+	_ = changelog.Record(request.Context(), server.pool, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.remove_member",
+		ResourceType: "group", ResourceID: strconv.FormatInt(groupID, 10),
+		Before: map[string]any{"subscriber_id": subscriberID},
+	})
 	writeJSON(response, http.StatusOK, map[string]bool{"ok": true})
 }
 
@@ -355,6 +389,11 @@ func (server *Server) addGroupEquipmentScope(response http.ResponseWriter, reque
 	}
 	_, _ = server.pool.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'add_group_equipment_scope',$2,$3)`,
 		actor, strconv.FormatInt(groupID, 10), now)
+	_ = changelog.Record(request.Context(), server.pool, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.add_equipment_scope",
+		ResourceType: "group", ResourceID: strconv.FormatInt(groupID, 10),
+		After: map[string]any{"scope_id": scopeID, "object_id": payload.ObjectID, "equipment_type": payload.EquipmentType, "site": payload.Site},
+	})
 	writeJSON(response, http.StatusCreated, map[string]any{"ok": true, "id": scopeID})
 }
 
@@ -368,6 +407,11 @@ func (server *Server) removeGroupEquipmentScope(response http.ResponseWriter, re
 	}
 	_, _ = server.pool.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'remove_group_equipment_scope',$2,$3)`,
 		actor, strconv.FormatInt(groupID, 10), now)
+	_ = changelog.Record(request.Context(), server.pool, changelog.Event{
+		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.remove_equipment_scope",
+		ResourceType: "group", ResourceID: strconv.FormatInt(groupID, 10),
+		Before: map[string]any{"scope_id": scopeID},
+	})
 	writeJSON(response, http.StatusOK, map[string]bool{"ok": true})
 }
 

@@ -28,7 +28,8 @@ def deactivate_departed_subscribers(session) -> int:
         subscriber.active = False
         log_action(session, actor="system", action="deprovision",
                    target=subscriber.trueconf_username,
-                   detail="логин отсутствует в LDAP-каталоге — подписки деактивированы")
+                   detail="логин отсутствует в LDAP-каталоге — подписки деактивированы",
+                   resource_type="subscriber", resource_id=str(subscriber.id), actor_role="system")
     if departed:
         session.commit()
     return len(departed)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -282,7 +283,35 @@ func (planner *Planner) planClosures(ctx context.Context) error {
 	return nil
 }
 
+// dbTx — общий знаменатель *pgxpool.Pool и pgx.Tx (по образцу
+// changelog.Execer). execCreateDelivery принимает его вместо
+// *pgxpool.Pool напрямую, чтобы сценарный notify-путь
+// (internal/planner/automation.go) мог создавать доставку на уже
+// открытой и залоченной FOR UPDATE SKIP LOCKED транзакции — тогда лок
+// строки scenario_runs покрывает и продвижение состояния, и создание
+// доставки одной атомарной единицей, без окна между ними.
+type dbTx interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func (planner *Planner) createDelivery(ctx context.Context, command delivery) (bool, error) {
+	tx, err := planner.pool.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	created, err := execCreateDelivery(ctx, tx, command)
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return created, nil
+}
+
+func execCreateDelivery(ctx context.Context, dbc dbTx, command delivery) (bool, error) {
 	// Идемпотентность держится на этом ключе (стабилен: problem+type+
 	// recipient, не зависит от chat_id). Раньше единственной защитой был
 	// ON CONFLICT DO NOTHING на notifications(problem_id,type,chat_id) —
@@ -303,14 +332,8 @@ func (planner *Planner) createDelivery(ctx context.Context, command delivery) (b
 		idempotencyKey += ":" + command.IdempotencySuffix
 	}
 
-	tx, err := planner.pool.Begin(ctx)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-
 	var alreadyQueued bool
-	if err := tx.QueryRow(ctx,
+	if err := dbc.QueryRow(ctx,
 		`SELECT EXISTS(SELECT 1 FROM delivery_outbox WHERE idempotency_key = $1)`,
 		idempotencyKey,
 	).Scan(&alreadyQueued); err != nil {
@@ -322,7 +345,7 @@ func (planner *Planner) createDelivery(ctx context.Context, command delivery) (b
 
 	now := time.Now().UTC()
 	var notificationID int64
-	err = tx.QueryRow(ctx, `
+	err := dbc.QueryRow(ctx, `
 		INSERT INTO notifications(
 			problem_id, type, recipient, chat_id, status, created_at, ai_summary, ai_recommendation)
 		VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7)
@@ -337,7 +360,7 @@ func (planner *Planner) createDelivery(ctx context.Context, command delivery) (b
 	if err != nil {
 		return false, fmt.Errorf("insert notification: %w", err)
 	}
-	_, err = tx.Exec(ctx, `
+	_, err = dbc.Exec(ctx, `
 		INSERT INTO delivery_outbox(
 			notification_id, contract_version, channel, idempotency_key,
 			recipient, provider_chat_id, reply_to_notification_id, text,
@@ -348,9 +371,6 @@ func (planner *Planner) createDelivery(ctx context.Context, command delivery) (b
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert delivery outbox: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return false, err
 	}
 	return true, nil
 }

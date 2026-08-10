@@ -102,39 +102,63 @@ func (planner *Planner) resolveScenarioGraph(ctx context.Context, scenarioID int
 	return graph, nil
 }
 
+// advanceScenario держит ОДНУ транзакцию на пару (scenarioID,problemID)
+// от чтения строки прогона до записи её нового состояния и создания
+// доставки включительно — SELECT ... FOR UPDATE SKIP LOCKED на этой
+// строке закрывает гонку двух реплик планировщика: раньше SELECT и
+// UPDATE были разделены, оба реплика читали один и тот же устаревший
+// notified_count и оба пытались создать доставку с одним и тем же
+// ключом идемпотентности. 0 строк после SKIP LOCKED — не ошибка, это
+// значит, что другой реплика в этот самый момент уже держит строку;
+// тихо откладываем до следующего тика (самоисцеляется, тот же принцип,
+// что у остальных очередей проекта).
 func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, scenarioName string, currentVersion int, currentGraph *scenario.Graph, versions map[[2]int64]*scenario.Graph, problemID int64) error {
 	problem, err := planner.loadProblem(ctx, problemID)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
+
+	tx, err := planner.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
 	var runID int64
 	var current, status string
 	var enteredAt time.Time
 	var notified int
 	var runVersion int
-	err = planner.pool.QueryRow(ctx, `SELECT id,current_node_id,status,step_entered_at,notified_count,scenario_version FROM scenario_runs WHERE scenario_id=$1 AND problem_id=$2`, scenarioID, problemID).Scan(&runID, &current, &status, &enteredAt, &notified, &runVersion)
+	err = tx.QueryRow(ctx, `SELECT id,current_node_id,status,step_entered_at,notified_count,scenario_version FROM scenario_runs WHERE scenario_id=$1 AND problem_id=$2 FOR UPDATE SKIP LOCKED`, scenarioID, problemID).Scan(&runID, &current, &status, &enteredAt, &notified, &runVersion)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	graph := currentGraph
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Условие решает только создание НОВОГО прогона — уже идущий
-		// прогон продолжается независимо от того, матчится ли текущее
-		// (возможно отредактированное) условие, он живёт по контракту
-		// своей закреплённой версии, не живой.
+		// 0 строк здесь значит ЛИБО прогона ещё нет, ЛИБО другой реплика
+		// прямо сейчас держит его лок — оба случая безопасно сходятся к
+		// одному пути: попытка создать (ON CONFLICT DO NOTHING — не
+		// гонка сама с собой, если строка уже существует), затем то же
+		// самое SKIP LOCKED ещё раз. Условие решает только создание
+		// НОВОГО прогона — уже идущий прогон продолжается независимо от
+		// того, матчится ли текущее (возможно отредактированное) условие,
+		// он живёт по контракту своей закреплённой версии, не живой.
 		condition := currentGraph.Nodes[currentGraph.RootID]
 		if !planner.matchesScenarioCondition(ctx, problem, condition.Data) {
 			return nil
 		}
-		_, err = planner.pool.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO scenario_runs(scenario_id,problem_id,current_node_id,status,step_entered_at,created_at,notified_count,scenario_version)
 			VALUES($1,$2,$3,'running',$4,$4,0,$5) ON CONFLICT(scenario_id,problem_id) DO NOTHING`,
 			scenarioID, problemID, currentGraph.RootID, now, currentVersion)
 		if err != nil {
 			return err
 		}
-		err = planner.pool.QueryRow(ctx, `SELECT id,current_node_id,status,step_entered_at,notified_count,scenario_version FROM scenario_runs WHERE scenario_id=$1 AND problem_id=$2`, scenarioID, problemID).Scan(&runID, &current, &status, &enteredAt, &notified, &runVersion)
+		err = tx.QueryRow(ctx, `SELECT id,current_node_id,status,step_entered_at,notified_count,scenario_version FROM scenario_runs WHERE scenario_id=$1 AND problem_id=$2 FOR UPDATE SKIP LOCKED`, scenarioID, problemID).Scan(&runID, &current, &status, &enteredAt, &notified, &runVersion)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return tx.Commit(ctx)
+		}
 		if err != nil {
 			return err
 		}
@@ -145,7 +169,7 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		}
 	}
 	if status != "running" {
-		return nil
+		return tx.Commit(ctx)
 	}
 	recipients, err := planner.resolveRecipients(ctx, problem)
 	if err != nil {
@@ -169,7 +193,7 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 				facts[id] = len(recipients) > 0
 			} else {
 				var username string
-				err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username)
+				err := tx.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username)
 				if err == nil {
 					facts[id] = contains(recipients, username)
 				} else if !errors.Is(err, pgx.ErrNoRows) {
@@ -179,16 +203,20 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		}
 	}
 	outcome := scenario.Advance(current, enteredAt, graph, problemStatus(problem), facts, now)
-	if err := planner.recordScenarioSteps(ctx, runID, scenarioID, runVersion, problemID, outcome.Trace, now); err != nil {
+	if err := recordScenarioSteps(ctx, tx, runID, scenarioID, runVersion, problemID, outcome.Trace, now); err != nil {
 		return err
 	}
 	switch outcome.Kind {
 	case "wait":
-		_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET current_node_id=$2,step_entered_at=$3 WHERE id=$1`, runID, outcome.CurrentNodeID, outcome.EnteredAt)
-		return err
+		if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET current_node_id=$2,step_entered_at=$3 WHERE id=$1`, runID, outcome.CurrentNodeID, outcome.EnteredAt); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	case "done":
-		_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET status='done',current_node_id=$2 WHERE id=$1`, runID, outcome.CurrentNodeID)
-		return err
+		if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status='done',current_node_id=$2 WHERE id=$1`, runID, outcome.CurrentNodeID); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
 	case "notify":
 		nextStatus := "running"
 		if outcome.CurrentNodeID == "" {
@@ -203,7 +231,7 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 			}
 		} else if employeeID := int64(number(outcome.Step.Data["employee_id"])); employeeID != 0 {
 			var username string
-			if err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username); err == nil {
+			if err := tx.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username); err == nil {
 				usernames = []string{username}
 			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return err
@@ -216,41 +244,40 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 			// доставки не создавалось. Явную ветку графа для этого случая
 			// добавляет отдельный узел (см. следующий этап); здесь —
 			// минимум: не считать это отправкой и оставить видимый след.
-			_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt)
-			if err != nil {
+			if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt); err != nil {
 				return err
 			}
-			_, _ = planner.pool.Exec(ctx, `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES('scheduler','scenario_no_recipient',$1,$2,$3)`,
-				fmt.Sprintf("scenario:%d:problem:%d", scenarioID, problemID), fmt.Sprintf("node=%s", outcome.Step.ID), now)
-			return nil
+			if _, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES('scheduler','scenario_no_recipient',$1,$2,$3)`,
+				fmt.Sprintf("scenario:%d:problem:%d", scenarioID, problemID), fmt.Sprintf("node=%s", outcome.Step.ID), now); err != nil {
+				return err
+			}
+			return tx.Commit(ctx)
 		}
-		_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4,notified_count=notified_count+1 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt)
-		if err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4,notified_count=notified_count+1 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt); err != nil {
 			return err
 		}
 		for _, username := range usernames {
-			_, err = planner.createDelivery(ctx, delivery{
+			if _, err = execCreateDelivery(ctx, tx, delivery{
 				ProblemID: problemID, Type: "SCENARIO", Recipient: username,
 				ChatID:            fmt.Sprintf("scenario:%d:%d:%s", scenarioID, notified+1, username),
 				Text:              RenderScenario(problem, scenarioName, notified > 0),
 				IdempotencySuffix: fmt.Sprintf("scenario:%d:notification:%d", scenarioID, notified+1),
-			})
-			if err != nil {
+			}); err != nil {
 				return err
 			}
 		}
-		return nil
+		return tx.Commit(ctx)
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // recordScenarioSteps пишет трассу реально пройденных узлов (пусто для
 // тиков, где прогон просто ещё ждёт) — раздел «Аналитика исполнения
 // сценариев»: без этой таблицы у прогона переживает только текущий
 // узел, восстановить путь целиком нельзя.
-func (planner *Planner) recordScenarioSteps(ctx context.Context, runID, scenarioID int64, version int, problemID int64, trace []scenario.StepTrace, now time.Time) error {
+func recordScenarioSteps(ctx context.Context, dbc dbTx, runID, scenarioID int64, version int, problemID int64, trace []scenario.StepTrace, now time.Time) error {
 	for _, step := range trace {
-		if _, err := planner.pool.Exec(ctx, `
+		if _, err := dbc.Exec(ctx, `
 			INSERT INTO scenario_run_steps(run_id,scenario_id,scenario_version,problem_id,node_id,node_type,branch,entered_at,created_at)
 			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 			runID, scenarioID, version, problemID, step.NodeID, step.NodeType, step.Branch, now, now); err != nil {

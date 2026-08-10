@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import {
   api,
@@ -322,7 +323,10 @@ export default function AvailabilityCalendar() {
               {dryRun && dryRun.warnings.length > 0 && (
                 <div className="rounded-md bg-amber-500/15 px-3 py-2 text-xs text-amber-400">
                   {dryRun.warnings.map((w, i) => (
-                    <div key={i}>⚠ {w}</div>
+                    <div key={i} className="flex items-center gap-1.5">
+                      <TriangleAlert size={13} strokeWidth={1.75} className="shrink-0" />
+                      {w}
+                    </div>
                   ))}
                 </div>
               )}

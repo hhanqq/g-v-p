@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { X } from "lucide-react";
 import { Fragment, useState } from "react";
 import {
   api,
@@ -133,9 +134,10 @@ export default function ChangeHistory() {
                 />
                 <button
                   onClick={() => removeCondition(i)}
+                  aria-label="Удалить условие"
                   className="rounded-md border border-border px-2 py-1.5 text-xs text-muted hover:bg-bg"
                 >
-                  ✕
+                  <X size={13} strokeWidth={1.75} />
                 </button>
               </div>
             );

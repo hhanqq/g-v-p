@@ -1,4 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { TriangleAlert } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, CoveragePolicy, GroupListItem, PolicyGapsResponse } from "../api";
 import { Card, PageHeader } from "../components/ui";
@@ -87,8 +88,9 @@ export default function Coverage() {
                     {gaps.length > 0 ? (
                       <ul className="mt-2 space-y-1 text-xs">
                         {gaps.map((g, i) => (
-                          <li key={i} className="rounded-md bg-amber-500/15 px-2 py-1 text-amber-400">
-                            ⚠ {new Date(g.from).toLocaleString("ru-RU")} — {new Date(g.to).toLocaleString("ru-RU")} (доступно: {g.min_available})
+                          <li key={i} className="flex items-center gap-1.5 rounded-md bg-amber-500/15 px-2 py-1 text-amber-400">
+                            <TriangleAlert size={13} strokeWidth={1.75} className="shrink-0" />
+                            {new Date(g.from).toLocaleString("ru-RU")} — {new Date(g.to).toLocaleString("ru-RU")} (доступно: {g.min_available})
                           </li>
                         ))}
                       </ul>

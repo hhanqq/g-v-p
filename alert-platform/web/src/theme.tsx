@@ -1,3 +1,4 @@
+import { Moon, Sun } from "lucide-react";
 import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
 type Theme = "light" | "dark";
@@ -73,7 +74,7 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
       title={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
       className={`flex items-center gap-1.5 text-xs text-muted hover:text-fg ${className}`}
     >
-      <span>{theme === "dark" ? "☀️" : "🌙"}</span>
+      {theme === "dark" ? <Sun size={14} strokeWidth={1.75} /> : <Moon size={14} strokeWidth={1.75} />}
       <span>{theme === "dark" ? "Светлая тема" : "Тёмная тема"}</span>
     </button>
   );

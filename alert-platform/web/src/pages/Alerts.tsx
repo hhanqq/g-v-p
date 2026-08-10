@@ -46,7 +46,17 @@ export default function Alerts() {
                       )}
                     </td>
                     <td className="px-4 py-2 text-muted">{a.state}</td>
-                    <td className="px-4 py-2">{a.resolved ? "✓" : "карантин"}</td>
+                    <td className="px-4 py-2">
+                      {a.resolved ? (
+                        <span className="rounded bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                          разрешён
+                        </span>
+                      ) : (
+                        <span className="rounded bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-400">
+                          карантин
+                        </span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

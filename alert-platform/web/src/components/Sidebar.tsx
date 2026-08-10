@@ -1,4 +1,9 @@
 import { useQueryClient } from "@tanstack/react-query";
+import {
+  BarChart3, CheckCircle2, ClipboardList, History, Home, Plug,
+  Server, ShieldCheck, Siren, Timer, Users, UsersRound, Workflow,
+  type LucideIcon,
+} from "lucide-react";
 import { useState } from "react";
 import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, CurrentUser } from "../api";
@@ -12,7 +17,7 @@ interface NavChild {
 interface NavItem {
   label: string;
   to: string;
-  icon: string;
+  icon: LucideIcon;
   badge?: "этап 2" | "бета";
   children?: NavChild[];
 }
@@ -21,32 +26,34 @@ interface NavItem {
 // уточнения приоритетов, структура компонента от конкретного набора не
 // зависит. "Активные"/"Завершённые"/"Все" и т.п. — реальные подпункты
 // (не заглушка ради красоты): каждый — отдельный query-параметр страницы.
+// Иконки — lucide-react (нейтральные SVG), не emoji: разные платформы
+// рендерят emoji по-разному, а в корпоративной консоли это визуальный шум.
 const NAV: NavItem[] = [
-  { label: "Главная", to: "/", icon: "🏠" },
+  { label: "Главная", to: "/", icon: Home },
   {
-    label: "Инциденты", to: "/incidents", icon: "🚨",
+    label: "Инциденты", to: "/incidents", icon: Siren,
     children: [
       { label: "Активные", to: "/incidents?status=open" },
       { label: "Завершённые", to: "/incidents?status=closed" },
       { label: "Все", to: "/incidents" },
     ],
   },
-  { label: "Алерты", to: "/alerts", icon: "📋" },
-  { label: "Оборудование", to: "/equipment", icon: "🛢️" },
+  { label: "Алерты", to: "/alerts", icon: ClipboardList },
+  { label: "Оборудование", to: "/equipment", icon: Server },
   {
-    label: "Сотрудники", to: "/employees", icon: "👥",
+    label: "Сотрудники", to: "/employees", icon: Users,
     children: [
       { label: "Все сотрудники", to: "/employees" },
       { label: "Доступность", to: "/availability" },
     ],
   },
-  { label: "Группы", to: "/groups", icon: "🧑‍🤝‍🧑" },
-  { label: "Покрытие", to: "/coverage", icon: "🛡️", badge: "бета" },
-  { label: "Сценарии", to: "/scenarios", icon: "🧩", badge: "этап 2" },
-  { label: "SLA", to: "/sla", icon: "⏱️", badge: "этап 2" },
-  { label: "Аналитика", to: "/analytics", icon: "📈", badge: "этап 2" },
-  { label: "Интеграции", to: "/integrations", icon: "🔌" },
-  { label: "История изменений", to: "/change-history", icon: "🕓" },
+  { label: "Группы", to: "/groups", icon: UsersRound },
+  { label: "Покрытие", to: "/coverage", icon: ShieldCheck, badge: "бета" },
+  { label: "Сценарии", to: "/scenarios", icon: Workflow, badge: "этап 2" },
+  { label: "SLA", to: "/sla", icon: Timer, badge: "этап 2" },
+  { label: "Аналитика", to: "/analytics", icon: BarChart3, badge: "этап 2" },
+  { label: "Интеграции", to: "/integrations", icon: Plug },
+  { label: "История изменений", to: "/change-history", icon: History },
 ];
 
 export default function Sidebar({ user }: { user: CurrentUser }) {
@@ -89,7 +96,7 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
                 }`}
               >
                 <span className="flex items-center gap-2.5">
-                  <span>{item.icon}</span>
+                  <item.icon size={16} strokeWidth={1.75} className="shrink-0" />
                   <span>{item.label}</span>
                 </span>
                 <span className="flex items-center gap-2">
@@ -129,8 +136,9 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
 
       <div className="border-t border-border px-5 py-4 text-sm">
         <ThemeToggle className="mb-3" />
-        <Link to="/compliance" className="mb-3 block text-xs text-muted hover:text-fg">
-          ✅ Соответствие критериям кейса
+        <Link to="/compliance" className="mb-3 flex items-center gap-1.5 text-xs text-muted hover:text-fg">
+          <CheckCircle2 size={14} strokeWidth={1.75} />
+          Соответствие критериям кейса
         </Link>
         <div className="mb-2">
           <div>{user.username}</div>

@@ -13,7 +13,7 @@ const NOTIFICATION_TYPE_LABEL: Record<string, string> = {
   SLA_BREACH: "нарушение SLA",
 };
 
-const STATUSES = [
+const KINDS = [
   { value: "available", label: "на месте" },
   { value: "shift", label: "смена" },
   { value: "on_call", label: "на связи" },
@@ -46,10 +46,10 @@ export default function EmployeeDetail() {
     enabled: !!data && data.subscriptions.length === 0,
   });
 
-  async function setStatus(status: string) {
+  async function setStatus(kind: string) {
     setSaving(true);
     try {
-      await api.post(`/employees/${id}/availability`, { status });
+      await api.post(`/employees/${id}/availability`, { kind });
       await queryClient.invalidateQueries({ queryKey: ["employee", id] });
       await queryClient.invalidateQueries({ queryKey: ["employees"] });
     } finally {
@@ -135,18 +135,19 @@ export default function EmployeeDetail() {
       <Card className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">Доступность</h3>
         <p className="mb-3 text-xs text-muted">
-          Статус выставляется вручную (источник данных — открытый вопрос, требует уточнения источника
-          интеграции с HR/TrueConf).
+          Быстрая кнопка — интервал «с этого момента, бессрочно», автоматически закрывает предыдущий
+          открытый. Источник — ручной ввод, не HR-фид; типизированные интервалы с датами начала/конца
+          и делегированием — на карточке доступности (следующий этап).
         </p>
         <div className="flex flex-wrap gap-2">
-          {STATUSES.map((s) => (
+          {KINDS.map((k) => (
             <button
-              key={s.value}
+              key={k.value}
               disabled={saving}
-              onClick={() => setStatus(s.value)}
+              onClick={() => setStatus(k.value)}
               className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-accent hover:text-white disabled:opacity-50"
             >
-              {s.label}
+              {k.label}
             </button>
           ))}
         </div>
@@ -154,7 +155,8 @@ export default function EmployeeDetail() {
           <ul className="mt-4 space-y-1 text-xs text-muted">
             {data.availability_history.slice(0, 5).map((a) => (
               <li key={a.id}>
-                {new Date(a.valid_from).toLocaleString("ru-RU")} — {a.status}
+                {new Date(a.valid_from).toLocaleString("ru-RU")} — {a.kind}
+                {a.valid_until ? ` — до ${new Date(a.valid_until).toLocaleString("ru-RU")}` : ""}
               </li>
             ))}
           </ul>

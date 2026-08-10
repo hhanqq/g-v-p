@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/availability"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/planner"
 )
@@ -555,34 +556,56 @@ func (server *Server) listEmployees(response http.ResponseWriter, request *http.
 	rows, err := server.pool.Query(request.Context(), `
 		SELECT subscriber.id,subscriber.trueconf_username,subscriber.full_name,subscriber.phone,
 		       subscriber.email,subscriber.position,subscriber.active,
-		       (SELECT COUNT(*) FROM subscriptions subscription WHERE subscription.subscriber_id=subscriber.id),
-		       (SELECT availability.status FROM employee_availability availability
-		        WHERE availability.subscriber_id=subscriber.id ORDER BY availability.valid_from DESC LIMIT 1)
+		       (SELECT COUNT(*) FROM subscriptions subscription WHERE subscription.subscriber_id=subscriber.id)
 		FROM subscribers subscriber ORDER BY subscriber.id`)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer rows.Close()
-	items := make([]map[string]any, 0)
+	type employeeRow struct {
+		id, subscriptionCount            int64
+		username                         string
+		fullName, phone, email, position sql.NullString
+		active                           bool
+	}
+	var employeeRows []employeeRow
+	ids := make([]int64, 0)
 	for rows.Next() {
-		var id, subscriptionCount int64
-		var username string
-		var fullName, phone, email, position, availability sql.NullString
-		var active bool
-		if err := rows.Scan(&id, &username, &fullName, &phone, &email, &position, &active, &subscriptionCount, &availability); err != nil {
+		var r employeeRow
+		if err := rows.Scan(&r.id, &r.username, &r.fullName, &r.phone, &r.email, &r.position, &r.active, &r.subscriptionCount); err != nil {
+			rows.Close()
 			writeError(response, http.StatusInternalServerError, "scan employees")
 			return
 		}
-		items = append(items, map[string]any{
-			"id": id, "trueconf_username": username, "full_name": nullableString(fullName),
-			"phone": nullableString(phone), "email": nullableString(email), "position": nullableString(position),
-			"active": active, "subscription_count": subscriptionCount, "availability_status": nullableString(availability),
-		})
+		employeeRows = append(employeeRows, r)
+		ids = append(ids, r.id)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		writeError(response, http.StatusInternalServerError, "load employees")
 		return
+	}
+	rows.Close()
+	// Раньше "текущий статус" был просто последней по valid_from строкой
+	// независимо от valid_until — отпуск, закончившийся неделю назад, до
+	// сих пор показывался бы активным. availability.Resolve разрешает
+	// пересечение интервалов по приоритету и честно проверяет истечение.
+	statuses, err := availability.Resolve(request.Context(), server.pool, ids, time.Now().UTC())
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	items := make([]map[string]any, 0, len(employeeRows))
+	for _, r := range employeeRows {
+		var currentKind *string
+		if kind := statuses[r.id].Kind; kind != "" {
+			currentKind = &kind
+		}
+		items = append(items, map[string]any{
+			"id": r.id, "trueconf_username": r.username, "full_name": nullableString(r.fullName),
+			"phone": nullableString(r.phone), "email": nullableString(r.email), "position": nullableString(r.position),
+			"active": r.active, "subscription_count": r.subscriptionCount, "availability_status": currentKind,
+		})
 	}
 	writeJSON(response, http.StatusOK, items)
 }
@@ -687,7 +710,7 @@ func (server *Server) loadSubscriptions(ctx context.Context, employeeID int64) (
 }
 
 func (server *Server) loadAvailability(ctx context.Context, employeeID int64) ([]map[string]any, error) {
-	rows, err := server.pool.Query(ctx, `SELECT id,status,valid_from,valid_until,source,note FROM employee_availability WHERE subscriber_id=$1 ORDER BY valid_from DESC`, employeeID)
+	rows, err := server.pool.Query(ctx, `SELECT id,kind,valid_until,valid_from,delegate_to_subscriber_id,source,note FROM employee_availability WHERE subscriber_id=$1 ORDER BY valid_from DESC`, employeeID)
 	if err != nil {
 		return nil, err
 	}
@@ -695,25 +718,33 @@ func (server *Server) loadAvailability(ctx context.Context, employeeID int64) ([
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var id int64
-		var status, source string
+		var kind, source string
 		var validFrom time.Time
 		var validUntil sql.NullTime
+		var delegateTo sql.NullInt64
 		var note sql.NullString
-		if err := rows.Scan(&id, &status, &validFrom, &validUntil, &source, &note); err != nil {
+		if err := rows.Scan(&id, &kind, &validUntil, &validFrom, &delegateTo, &source, &note); err != nil {
 			return nil, err
 		}
 		items = append(items, map[string]any{
-			"id": id, "status": status, "valid_from": formatISO(validFrom), "valid_until": nullableISO(validUntil),
-			"source": source, "note": nullableString(note),
+			"id": id, "kind": kind, "valid_from": formatISO(validFrom), "valid_until": nullableISO(validUntil),
+			"delegate_to_subscriber_id": nullableInt64(delegateTo), "source": source, "note": nullableString(note),
 		})
 	}
 	return items, rows.Err()
 }
 
 type availabilityRequest struct {
-	Status     string  `json:"status"`
-	ValidUntil *string `json:"valid_until"`
-	Note       *string `json:"note"`
+	Kind                   string  `json:"kind"`
+	ValidUntil             *string `json:"valid_until"`
+	Note                   *string `json:"note"`
+	DelegateToSubscriberID *int64  `json:"delegate_to_subscriber_id"`
+}
+
+var validAvailabilityKinds = map[string]bool{
+	"override_available": true, "override_unavailable": true, "sick_leave": true,
+	"vacation": true, "delegation": true, "shift": true, "on_call": true,
+	"unavailable": true, "available": true,
 }
 
 func (server *Server) setEmployeeAvailability(response http.ResponseWriter, request *http.Request, user map[string]any) {
@@ -726,8 +757,12 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 	var payload availabilityRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 1<<20))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&payload); err != nil || payload.Status == "" {
+	if err := decoder.Decode(&payload); err != nil || !validAvailabilityKinds[payload.Kind] {
 		writeError(response, http.StatusUnprocessableEntity, "invalid availability payload")
+		return
+	}
+	if (payload.Kind == "delegation") != (payload.DelegateToSubscriberID != nil) {
+		writeError(response, http.StatusUnprocessableEntity, "delegation requires delegate_to_subscriber_id, other kinds must not set it")
 		return
 	}
 	var validUntil *time.Time
@@ -754,16 +789,26 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 		return
 	}
 	now := time.Now().UTC()
+	// Быстрый тумблер означает «я вот это, с текущего момента, бессрочно»
+	// — закрывает любой ранее открытый интервал. Календарное создание
+	// произвольных интервалов (следующий этап) через этот путь не идёт —
+	// там пересекающиеся интервалы обязаны сосуществовать и решаться
+	// приоритетом при чтении (internal/availability), а не закрытием.
+	if _, err = tx.Exec(request.Context(), `UPDATE employee_availability SET valid_until=$2 WHERE subscriber_id=$1 AND valid_until IS NULL AND valid_from<=$2`, id, now); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
 	var availabilityID int64
 	err = tx.QueryRow(request.Context(), `
-		INSERT INTO employee_availability(subscriber_id,status,valid_from,valid_until,source,note,created_at)
-		VALUES($1,$2,$3,$4,'manual',$5,$3) RETURNING id`, id, payload.Status, now, validUntil, payload.Note).Scan(&availabilityID)
+		INSERT INTO employee_availability(subscriber_id,kind,delegate_to_subscriber_id,valid_from,valid_until,source,note,created_at)
+		VALUES($1,$2,$3,$4,$5,'manual',$6,$4) RETURNING id`,
+		id, payload.Kind, payload.DelegateToSubscriberID, now, validUntil, payload.Note).Scan(&availabilityID)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
 	actor, _ := user["username"].(string)
-	_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'set_availability',$2,$3,$4)`, actor, username, payload.Status, now)
+	_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'set_availability',$2,$3,$4)`, actor, username, payload.Kind, now)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
@@ -771,7 +816,7 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 	if err := changelog.Record(request.Context(), tx, changelog.Event{
 		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "subscriber.set_availability",
 		ResourceType: "subscriber", ResourceID: strconv.FormatInt(id, 10),
-		After: map[string]any{"status": payload.Status, "valid_until": payload.ValidUntil, "note": payload.Note},
+		After: map[string]any{"kind": payload.Kind, "valid_until": payload.ValidUntil, "note": payload.Note},
 	}); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return

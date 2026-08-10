@@ -201,7 +201,15 @@ export interface EmployeeRecentAlert {
 
 export interface EmployeeDetail extends EmployeeListItem {
   subscriptions: { id: number; subsidiary: string | null; service_id: string | null; priority_threshold: string | null }[];
-  availability_history: { id: number; status: string; valid_from: string; valid_until: string | null; source: string; note: string | null }[];
+  availability_history: {
+    id: number;
+    kind: string;
+    valid_from: string;
+    valid_until: string | null;
+    delegate_to_subscriber_id: number | null;
+    source: string;
+    note: string | null;
+  }[];
   recent_alerts: EmployeeRecentAlert[];
 }
 

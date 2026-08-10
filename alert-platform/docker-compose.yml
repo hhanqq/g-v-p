@@ -23,6 +23,11 @@ services:
       POSTGRES_USER: alert
       POSTGRES_PASSWORD: alert
       POSTGRES_DB: alert_platform
+      # Только для docker-entrypoint-initdb.d/01_create_replicator.sh —
+      # исполняется исключительно при инициализации ПУСТОГО тома, не
+      # трогает уже работающий primary (там роль создана вручную,
+      # раздел «Инфраструктура» кейса — резервирование).
+      REPLICATOR_PASSWORD: ${REPLICATOR_PASSWORD:-replicator_demo_pw}
     # Порт параметризован: 5433 часто уже занят локальной БД другого
     # проекта; внутри compose адрес всегда postgres:5432. Биндим на
     # 127.0.0.1 — только для локальной отладки (psql/docker exec на самой
@@ -30,11 +35,39 @@ services:
     ports: ["127.0.0.1:${POSTGRES_PORT:-5433}:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ./database/initdb:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U alert"]
       interval: 3s
       timeout: 3s
       retries: 10
+
+  postgres-replica:
+    # Раздел «Инфраструктура и масштабируемость» кейса — резервирование.
+    # Асинхронная физическая streaming-реплика primary. Только на
+    # чтение, ничто в приложении её не запрашивает в обычной работе —
+    # существует для демонстрации отказоустойчивости, не read-scaling.
+    # Promotion — ручной (pg_ctl promote), не автоматический failover
+    # (Patroni/repmgr — осознанно не в объёме пилота).
+    image: pgvector/pgvector:pg16
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    environment:
+      PGDATA: /var/lib/postgresql/data
+      PRIMARY_HOST: postgres
+      REPLICATION_USER: replicator
+      PGPASSWORD: ${REPLICATOR_PASSWORD:-replicator_demo_pw}
+    volumes:
+      - pgdata_replica:/var/lib/postgresql/data
+      - ./ops/postgres-replica/entrypoint.sh:/replica-entrypoint.sh:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alert -d alert_platform"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
 
   migrate:
     build: .
@@ -336,6 +369,7 @@ services:
 
 volumes:
   pgdata:
+  pgdata_replica:
   redpandadata:
   clickhousedata:
   miniodata:

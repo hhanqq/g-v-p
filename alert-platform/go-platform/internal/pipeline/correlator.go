@@ -85,6 +85,12 @@ func tryCorrelate(ctx context.Context, tx pgx.Tx, trigger *problem) error {
 		if _, err = tx.Exec(ctx, `UPDATE problems SET incident_id=$1 WHERE id=$2`, incidentID, trigger.ID); err != nil {
 			return err
 		}
+		// Новый symptom мог присоединиться к инциденту, который уже был
+		// закрыт (все прежние члены резолвились раньше) — раз кластер
+		// снова растёт, инцидент снова активен.
+		if _, err = tx.Exec(ctx, `UPDATE incidents SET closed_at=NULL WHERE id=$1`, incidentID); err != nil {
+			return err
+		}
 		trigger.IncidentID = &incidentID
 		return nil
 	}

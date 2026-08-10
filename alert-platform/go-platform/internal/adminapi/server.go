@@ -182,8 +182,28 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.createEquipment)
 		return
 	}
+	if request.Method == http.MethodGet && path == "/api/equipment/groups" {
+		server.withAuth(response, request, server.listEquipmentGroups)
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/equipment/") {
 		server.withAuth(response, request, server.equipmentHistory)
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/summary") && strings.HasPrefix(path, "/api/equipment/") {
+		server.withAuth(response, request, server.equipmentSummary)
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/incidents") && strings.HasPrefix(path, "/api/equipment/") {
+		server.withAuth(response, request, server.equipmentIncidentsList)
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/timeline") && strings.HasPrefix(path, "/api/equipment/") {
+		server.withAuth(response, request, server.equipmentTimeline)
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/graph") && strings.HasPrefix(path, "/api/equipment/") {
+		server.withAuth(response, request, server.equipmentGraph)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/equipment/") {
@@ -921,21 +941,40 @@ func (server *Server) serveSPA(response http.ResponseWriter, request *http.Reque
 }
 
 type equipmentListItem struct {
-	ID            string  `json:"id"`
-	Kind          string  `json:"kind"`
-	EquipmentType *string `json:"equipment_type"`
-	Site          string  `json:"site"`
-	Name          string  `json:"name"`
-	FQDN          *string `json:"fqdn"`
-	IP            *string `json:"ip"`
+	ID             string  `json:"id"`
+	Kind           string  `json:"kind"`
+	EquipmentType  *string `json:"equipment_type"`
+	Site           string  `json:"site"`
+	Name           string  `json:"name"`
+	FQDN           *string `json:"fqdn"`
+	IP             *string `json:"ip"`
+	ActiveProblems int     `json:"active_problems"`
+	OpenIncidents  int     `json:"open_incidents"`
+	Alerts24h      int     `json:"alerts_24h"`
+	Alerts30d      int     `json:"alerts_30d"`
+	LastEventAt    *string `json:"last_event_at"`
+	WorstPriority  *string `json:"worst_priority"`
 }
 
+// listEquipment — GET /api/equipment[?site=&equipment_type=]. Лист конечного
+// уровня drill-down (раздел I.7 ТЗ): каждая строка несёт собственные
+// агрегаты (активные проблемы/открытые инциденты/алерты 24ч и 30д/статус),
+// не только паспортные поля — чтобы состояние объекта было видно до
+// перехода в карточку.
 func (server *Server) listEquipment(response http.ResponseWriter, request *http.Request, _ map[string]any) {
 	query := `SELECT id,kind,equipment_type,site,name,fqdn,ip FROM cmdb_objects`
+	conditions := []string{}
 	args := []any{}
 	if site := request.URL.Query().Get("site"); site != "" {
-		query += ` WHERE site=$1`
 		args = append(args, site)
+		conditions = append(conditions, fmt.Sprintf("site=$%d", len(args)))
+	}
+	if equipmentType := request.URL.Query().Get("equipment_type"); equipmentType != "" {
+		args = append(args, equipmentType)
+		conditions = append(conditions, fmt.Sprintf("equipment_type=$%d", len(args)))
+	}
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
 	}
 	query += ` ORDER BY id`
 	rows, err := server.pool.Query(request.Context(), query, args...)
@@ -943,23 +982,108 @@ func (server *Server) listEquipment(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer rows.Close()
 	items := make([]equipmentListItem, 0)
+	objectIDs := make([]string, 0)
 	for rows.Next() {
 		var item equipmentListItem
 		var equipmentType, fqdn, ip sql.NullString
 		if err := rows.Scan(&item.ID, &item.Kind, &equipmentType, &item.Site, &item.Name, &fqdn, &ip); err != nil {
+			rows.Close()
 			writeError(response, http.StatusInternalServerError, "scan equipment")
 			return
 		}
 		item.EquipmentType, item.FQDN, item.IP = nullableString(equipmentType), nullableString(fqdn), nullableString(ip)
 		items = append(items, item)
+		objectIDs = append(objectIDs, item.ID)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		writeError(response, http.StatusInternalServerError, "load equipment")
 		return
 	}
+	rows.Close()
+
+	stats, err := server.equipmentObjectStats(request.Context(), objectIDs)
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	for i := range items {
+		if s, ok := stats[items[i].ID]; ok {
+			items[i].ActiveProblems, items[i].OpenIncidents = s.active, s.openIncidents
+			items[i].Alerts24h, items[i].Alerts30d = s.alerts24h, s.alerts30d
+			items[i].LastEventAt, items[i].WorstPriority = s.lastEventAt, s.worstPriority
+		}
+	}
 	writeJSON(response, http.StatusOK, items)
+}
+
+type equipmentObjectStat struct {
+	active, openIncidents, alerts24h, alerts30d int
+	lastEventAt, worstPriority                  *string
+}
+
+// equipmentObjectStats — по-объектные агрегаты для листинга/summary.
+// Три отдельных запроса (проблемы/инциденты, события) вместо одного
+// JOIN — намеренно: problems×events на один объект дало бы decartово
+// произведение строк и задвоило бы счётчики.
+func (server *Server) equipmentObjectStats(ctx context.Context, objectIDs []string) (map[string]equipmentObjectStat, error) {
+	result := make(map[string]equipmentObjectStat, len(objectIDs))
+	if len(objectIDs) == 0 {
+		return result, nil
+	}
+	problemRows, err := server.pool.Query(ctx, `
+		SELECT object_id,
+			count(*) FILTER (WHERE status IN ('OPEN','FLAPPING')) AS active,
+			count(DISTINCT incident_id) FILTER (WHERE incident_id IS NOT NULL AND status IN ('OPEN','FLAPPING')) AS open_incidents,
+			min(priority) FILTER (WHERE status IN ('OPEN','FLAPPING')) AS worst_priority
+		FROM problems WHERE object_id = ANY($1) GROUP BY object_id`, objectIDs)
+	if err != nil {
+		return nil, err
+	}
+	for problemRows.Next() {
+		var objectID string
+		var stat equipmentObjectStat
+		var worstPriority sql.NullString
+		if err := problemRows.Scan(&objectID, &stat.active, &stat.openIncidents, &worstPriority); err != nil {
+			problemRows.Close()
+			return nil, err
+		}
+		stat.worstPriority = nullableString(worstPriority)
+		result[objectID] = stat
+	}
+	if err := problemRows.Err(); err != nil {
+		problemRows.Close()
+		return nil, err
+	}
+	problemRows.Close()
+
+	eventRows, err := server.pool.Query(ctx, `
+		SELECT object_id,
+			count(*) FILTER (WHERE occurred_at >= now() - INTERVAL '24 hours') AS alerts24h,
+			count(*) FILTER (WHERE occurred_at >= now() - INTERVAL '30 days') AS alerts30d,
+			max(occurred_at) AS last_event_at
+		FROM events WHERE object_id = ANY($1) GROUP BY object_id`, objectIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer eventRows.Close()
+	for eventRows.Next() {
+		var objectID string
+		var alerts24h, alerts30d int
+		var lastEventAt sql.NullTime
+		if err := eventRows.Scan(&objectID, &alerts24h, &alerts30d, &lastEventAt); err != nil {
+			return nil, err
+		}
+		stat := result[objectID]
+		stat.alerts24h, stat.alerts30d = alerts24h, alerts30d
+		if lastEventAt.Valid {
+			formatted := formatISO(lastEventAt.Time)
+			stat.lastEventAt = &formatted
+		}
+		result[objectID] = stat
+	}
+	return result, eventRows.Err()
 }
 
 type relatedProblem struct {

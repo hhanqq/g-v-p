@@ -43,6 +43,12 @@ func applyEvent(ctx context.Context, tx pgx.Tx, dedupKey *string, event Event, r
 		latest.ResolvedAt = nil
 		latest.LastSeenAt = event.OccurredAt
 		_, err = tx.Exec(ctx, `UPDATE problems SET toggle_count=$1,repeat_count=$2,status=$3,resolved_at=NULL,last_seen_at=$4 WHERE id=$5`, latest.ToggleCount, latest.RepeatCount, latest.Status, latest.LastSeenAt, latest.ID)
+		if err != nil {
+			return latest, err
+		}
+		if latest.IncidentID != nil {
+			_, err = tx.Exec(ctx, `UPDATE incidents SET closed_at=NULL WHERE id=$1`, *latest.IncidentID)
+		}
 		return latest, err
 	case actionCreate:
 		created := &problem{
@@ -61,10 +67,37 @@ func applyEvent(ctx context.Context, tx pgx.Tx, dedupKey *string, event Event, r
 		latest.ResolvedAt = &event.OccurredAt
 		latest.LastSeenAt = event.OccurredAt
 		_, err = tx.Exec(ctx, `UPDATE problems SET status='RESOLVED',resolved_at=$1,last_seen_at=$1 WHERE id=$2`, event.OccurredAt, latest.ID)
+		if err != nil {
+			return latest, err
+		}
+		if latest.IncidentID != nil {
+			err = closeIncidentIfAllResolved(ctx, tx, *latest.IncidentID, event.OccurredAt)
+		}
 		return latest, err
 	default:
 		return nil, nil
 	}
+}
+
+// closeIncidentIfAllResolved закрывает инцидент только когда ВСЕ его члены
+// (root + symptoms из incident_problems) реально RESOLVED — не только тот
+// Problem, который только что резолвнулся. Симметрично reopen-логике выше:
+// incidents.closed_at раньше вообще никогда не писался (см. аудит 2026-08-11),
+// UI трактовал «открыт/закрыт» только по статусу root problem.
+func closeIncidentIfAllResolved(ctx context.Context, tx pgx.Tx, incidentID int64, at time.Time) error {
+	var openCount int
+	err := tx.QueryRow(ctx, `
+		SELECT count(*) FROM incident_problems member
+		JOIN problems problem ON problem.id = member.problem_id
+		WHERE member.incident_id=$1 AND problem.status <> 'RESOLVED'`, incidentID).Scan(&openCount)
+	if err != nil {
+		return err
+	}
+	if openCount > 0 {
+		return nil
+	}
+	_, err = tx.Exec(ctx, `UPDATE incidents SET closed_at=$1 WHERE id=$2 AND closed_at IS NULL`, at, incidentID)
+	return err
 }
 
 func chooseStateAction(latest *problem, state string, occurredAt time.Time, flapWindow time.Duration) stateAction {

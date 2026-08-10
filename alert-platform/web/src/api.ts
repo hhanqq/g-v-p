@@ -247,6 +247,24 @@ export interface ScenarioDetail extends ScenarioListItem {
   created_by: string | null;
 }
 
+export interface AvailabilityInterval {
+  id: number;
+  kind: string;
+  valid_from: string;
+  valid_until: string | null;
+  delegate_to_subscriber_id: number | null;
+  note: string | null;
+}
+
+export interface AvailabilityCalendarResponse {
+  days: { date: string; available: boolean; kind: string }[];
+  intervals: AvailabilityInterval[];
+}
+
+export interface DryRunResponse {
+  warnings: string[];
+}
+
 export interface ScenarioStatsResponse {
   scenario_id: number;
   version: number;

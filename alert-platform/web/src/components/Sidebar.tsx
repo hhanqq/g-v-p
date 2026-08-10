@@ -37,7 +37,7 @@ const NAV: NavItem[] = [
     label: "Сотрудники", to: "/employees", icon: "👥",
     children: [
       { label: "Все сотрудники", to: "/employees" },
-      { label: "Доступность", to: "/employees?view=availability" },
+      { label: "Доступность", to: "/availability" },
     ],
   },
   { label: "Группы", to: "/groups", icon: "🧑‍🤝‍🧑" },

@@ -10,6 +10,7 @@ import Alerts from "./pages/Alerts";
 import Equipment from "./pages/Equipment";
 import EquipmentDetail from "./pages/EquipmentDetail";
 import Employees from "./pages/Employees";
+import AvailabilityCalendar from "./pages/AvailabilityCalendar";
 import EmployeeDetail from "./pages/EmployeeDetail";
 import Groups from "./pages/Groups";
 import Scenarios from "./pages/Scenarios";
@@ -54,6 +55,7 @@ export default function App() {
           <Route path="/equipment/:id" element={<EquipmentDetail />} />
           <Route path="/employees" element={<Employees />} />
           <Route path="/employees/:id" element={<EmployeeDetail />} />
+          <Route path="/availability" element={<AvailabilityCalendar />} />
           <Route path="/groups" element={<Groups />} />
           <Route path="/scenarios" element={<Scenarios />} />
           <Route path="/scenarios/new" element={<ScenarioEditor />} />

@@ -162,16 +162,15 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.employeeSubscriptionSuggestion)
 		return
 	}
+	if server.routeEmployeeAvailability(response, request, path) {
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/employees/") {
 		server.withAuth(response, request, server.getEmployee)
 		return
 	}
 	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/employees/") {
 		server.withAuth(response, request, server.updateEmployee)
-		return
-	}
-	if request.Method == http.MethodPost && strings.HasSuffix(path, "/availability") && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.setEmployeeAvailability)
 		return
 	}
 

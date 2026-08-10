@@ -25,11 +25,14 @@ graph LR
     WRK -.->|"классификация, дедупликация"| OLLAMA[("Ollama\nлокальная LLM, self-hosted")]
 
     PG --> PLAN["Delivery planner (Go)\nадресация + готовый текст"]
-    PLAN --> OUT[("Transactional outbox\nDeliveryCommand v1")]
+    PLAN --> OUT[("Transactional outbox\nchannel: trueconf | email")]
     PLAN -.->|"саммари, рекомендации,\nподсказка подписки"| OLLAMA
     OUT --> DEL["Тонкий Python-адаптер\nTrueConf"]
+    OUT --> MAIL["delivery-email (Go)\nSMTP, тот же тонкий принцип"]
     DEL -->|"Chatbot Connector API"| TC["TrueConf Server"]
+    MAIL -->|"SMTP"| SMTP[("Корпоративный SMTP\n(демо: mailhog)")]
     TC --> USR["Сотрудники"]
+    SMTP --> USR
 
     ADM["Admin Console\nдашборд, источники,\nличный кабинет"] --> PG
     USR -->|"/кабинет — подписки"| ADM
@@ -68,6 +71,8 @@ MinIO. Раздел 7 ниже.
 | PostgreSQL | PostgreSQL 16 | Очередь-как-БД, transactional outbox, WORM-журнал сигналов, CMDB, подписки, история |
 | Delivery planner | Go 1.25, pgx | Маршрутизация, шаблоны, локальный Ollama и подготовка команд `DeliveryCommand v1` |
 | Delivery TrueConf | Python, `python-trueconf-bot` | Vendor SDK: входящие команды/reply-ACK, создание чата, отправка, retry/backoff и сохранение provider `chat_id/message_id` |
+| delivery-email | Go 1.25, `net/smtp` | Второй канал доставки — тонкий адаптер по тому же принципу, что и TrueConf: свой claim/retry-луп на `delivery_outbox` (`channel='email'`), SMTP (STARTTLS автоматически, если сервер объявляет) |
+| SMTP-релей | Демо: `mailhog` (реальный протокол, веб-просмотр писем); прод: корпоративный SMTP через `SMTP_HOST/PORT/USERNAME/PASSWORD` без пересборки | Приём писем от delivery-email |
 | Ollama | Открытые веса (self-hosted) | Семь ИИ-сценариев (раздел 5 ниже) — работает локально, без внешних API |
 | Admin Console | Go API + React SPA | Go раздаёт SPA, выполняет LDAP session auth, обслуживает admin API и token-based личный кабинет; старые HTML URL перенаправляются на SPA |
 | Demo Runner | Python/FastAPI, internal-only | Только синтетический datagen и живые Ollama self-tests; не обслуживает HTML/авторизацию и не участвует в production-тракте |

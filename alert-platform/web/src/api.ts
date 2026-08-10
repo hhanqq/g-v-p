@@ -88,6 +88,27 @@ export interface IncidentDetail {
   members: IncidentMember[];
 }
 
+export interface RoutingTraceItem {
+  source: "notification" | "scenario";
+  at: string;
+  // source === "notification"
+  notification_type?: string;
+  recipient?: string;
+  // source === "scenario"
+  scenario_id?: number;
+  scenario_name?: string;
+  node_id?: string;
+  branch?: string | null;
+  trace: {
+    reason?: string;
+    selected?: string[];
+    available?: boolean;
+    kind?: string;
+    delegated_from?: string | null;
+    candidates?: { username: string; available: boolean; kind: string }[];
+  };
+}
+
 export interface AlertItem {
   id: number;
   signal_id: number;

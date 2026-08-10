@@ -540,8 +540,19 @@ func (planner *Planner) planSLABreaches(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		for _, recipient := range recipients {
-			_, err = planner.createDelivery(ctx, delivery{ProblemID: id, Type: "SLA_BREACH", Recipient: recipient, ChatID: "sla:" + recipient, Text: RenderSLABreach(problem, ruleName, age, threshold), IdempotencySuffix: fmt.Sprintf("notice:%d", noticeID)})
+		decisions, err := planner.resolveRoutingDecisions(ctx, recipients, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		for _, decision := range decisions {
+			recipient := decision.Username
+			_, err = planner.createDelivery(ctx, delivery{
+				ProblemID: id, Type: "SLA_BREACH", Recipient: recipient, ChatID: "sla:" + recipient,
+				Text: RenderSLABreach(problem, ruleName, age, threshold), IdempotencySuffix: fmt.Sprintf("notice:%d", noticeID),
+				RoutingTrace: map[string]any{
+					"available": decision.Available, "kind": decision.Kind, "delegated_from": decision.DelegatedFrom,
+				},
+			})
 			if err != nil {
 				return err
 			}

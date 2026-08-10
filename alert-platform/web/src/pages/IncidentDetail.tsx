@@ -1,7 +1,69 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api, IncidentDetail as IncidentDetailType } from "../api";
+import { api, IncidentDetail as IncidentDetailType, RoutingTraceItem } from "../api";
 import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
+
+function RoutingTraceCard({ problemId }: { problemId: number }) {
+  const { data: trace } = useQuery<RoutingTraceItem[]>({
+    queryKey: ["routing-trace", problemId],
+    queryFn: () => api.get<RoutingTraceItem[]>(`/problems/${problemId}/routing-trace`),
+  });
+  const [expanded, setExpanded] = useState<number | null>(null);
+
+  if (!trace || trace.length === 0) return null;
+
+  return (
+    <Card className="mb-4">
+      <h3 className="mb-3 text-sm font-semibold">Маршрутизация</h3>
+      <div className="space-y-1.5">
+        {trace.map((item, idx) => {
+          const recipient = item.source === "notification" ? item.recipient : item.trace.selected?.join(", ");
+          const isOpen = expanded === idx;
+          return (
+            <div key={idx} className="rounded-md bg-bg px-3 py-2 text-xs">
+              <button className="flex w-full items-center justify-between text-left" onClick={() => setExpanded(isOpen ? null : idx)}>
+                <span>
+                  {new Date(item.at).toLocaleString("ru-RU")} ·{" "}
+                  {item.source === "notification" ? item.notification_type : `сценарий «${item.scenario_name}»`} →{" "}
+                  <span className="font-medium text-fg">{recipient || "—"}</span>
+                  {item.trace.delegated_from && <span className="text-muted"> (делегировано от {item.trace.delegated_from})</span>}
+                </span>
+                <span className="text-muted">{isOpen ? "▲" : "почему ▼"}</span>
+              </button>
+              {isOpen && (
+                <div className="mt-2 space-y-1 border-t border-border pt-2 text-muted">
+                  {item.source === "notification" && (
+                    <div>
+                      доступность: {item.trace.available === false ? "недоступен" : "доступен"}
+                      {item.trace.kind ? ` (${item.trace.kind})` : ""}
+                    </div>
+                  )}
+                  {item.source === "scenario" && (
+                    <>
+                      <div>узел: {item.node_id}{item.branch ? `, ветка: ${item.branch}` : ""}</div>
+                      <div>причина: {item.trace.reason ?? "—"}</div>
+                      {item.trace.candidates && item.trace.candidates.length > 0 && (
+                        <ul className="ml-3 list-disc">
+                          {item.trace.candidates.map((c) => (
+                            <li key={c.username}>
+                              {c.username} — {c.available ? "доступен" : "недоступен"}
+                              {c.kind ? ` (${c.kind})` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
 
 export default function IncidentDetail() {
   const { id } = useParams();
@@ -45,6 +107,8 @@ export default function IncidentDetail() {
           )}
         </Card>
       )}
+
+      <RoutingTraceCard problemId={data.root_problem_id} />
 
       <h3 className="mb-2 text-sm font-semibold">Связанные события ({symptoms.length})</h3>
       <div className="space-y-2">

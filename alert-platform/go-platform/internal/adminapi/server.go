@@ -138,6 +138,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.getIncident)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/routing-trace") && strings.HasPrefix(path, "/api/problems/") {
+		server.withAuth(response, request, server.problemRoutingTrace)
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/alerts" {
 		server.withAuth(response, request, server.listAlerts)
 		return

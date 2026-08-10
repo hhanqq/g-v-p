@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -14,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/availability"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,6 +46,90 @@ type delivery struct {
 	AISummary             *string
 	AIRecommendation      *string
 	IdempotencySuffix     string
+	RoutingTrace          any
+}
+
+// RecipientDecision — один получатель после применения доступности к
+// уже отфильтрованному по подписке списку (resolveRecipients). Раздел
+// «Маршрутизация с учётом доступности»: недоступные НЕ исключаются из
+// набора целиком (в отличие от сценарных узлов availability_check/
+// first_available — это осознанное решение, полное исключение
+// недоступных для этого пути никем не запрошено и меняло бы поведение
+// самого высоконагруженного тракта), только delegation-интервал
+// перенаправляет получателя на делегата вместо него.
+type RecipientDecision struct {
+	Username      string
+	SubscriberID  int64
+	Available     bool
+	Kind          string
+	DelegatedFrom *string
+}
+
+func (planner *Planner) resolveRoutingDecisions(ctx context.Context, usernames []string, at time.Time) ([]RecipientDecision, error) {
+	if len(usernames) == 0 {
+		return nil, nil
+	}
+	rows, err := planner.pool.Query(ctx, `SELECT id, trueconf_username FROM subscribers WHERE trueconf_username = ANY($1) AND active = TRUE`, usernames)
+	if err != nil {
+		return nil, err
+	}
+	type subject struct {
+		id       int64
+		username string
+	}
+	var subjects []subject
+	ids := make([]int64, 0, len(usernames))
+	for rows.Next() {
+		var s subject
+		if err := rows.Scan(&s.id, &s.username); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		subjects = append(subjects, s)
+		ids = append(ids, s.id)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	statuses, err := availability.Resolve(ctx, planner.pool, ids, at)
+	if err != nil {
+		return nil, err
+	}
+
+	var decisions []RecipientDecision
+	seen := make(map[string]bool)
+	for _, s := range subjects {
+		status := statuses[s.id]
+		if status.Kind == "delegation" && status.DelegateTo != nil {
+			var delegateUsername string
+			err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, *status.DelegateTo).Scan(&delegateUsername)
+			if errors.Is(err, pgx.ErrNoRows) {
+				// Делегат неактивен — редкая гонка. Редирект некуда;
+				// намеренно НЕ откатываемся на делегатора (он явно
+				// попросил его не тревожить), пропускаем этого получателя.
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			if seen[delegateUsername] {
+				continue
+			}
+			seen[delegateUsername] = true
+			delegator := s.username
+			decisions = append(decisions, RecipientDecision{Username: delegateUsername, SubscriberID: *status.DelegateTo, Available: true, Kind: "delegation", DelegatedFrom: &delegator})
+			continue
+		}
+		if seen[s.username] {
+			continue
+		}
+		seen[s.username] = true
+		decisions = append(decisions, RecipientDecision{Username: s.username, SubscriberID: s.id, Available: status.Available, Kind: status.Kind})
+	}
+	return decisions, nil
 }
 
 func New(ctx context.Context, databaseURL string, ollama *OllamaClient, runbooks map[string][]string) (*Planner, error) {
@@ -164,7 +250,12 @@ func (planner *Planner) planNew(ctx context.Context, problemID int64) error {
 	if err != nil {
 		return err
 	}
-	for _, recipient := range recipients {
+	decisions, err := planner.resolveRoutingDecisions(ctx, recipients, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+	for _, decision := range decisions {
+		recipient := decision.Username
 		text := RenderNew(problem)
 		if planner.publicURL != "" {
 			var token string
@@ -187,6 +278,9 @@ func (planner *Planner) planNew(ctx context.Context, problemID int64) error {
 			Recipient: recipient,
 			ChatID:    "recipient:" + recipient,
 			Text:      text,
+			RoutingTrace: map[string]any{
+				"available": decision.Available, "kind": decision.Kind, "delegated_from": decision.DelegatedFrom,
+			},
 		})
 		if err != nil {
 			return err
@@ -344,15 +438,22 @@ func execCreateDelivery(ctx context.Context, dbc dbTx, command delivery) (bool, 
 	}
 
 	now := time.Now().UTC()
+	var routingTraceJSON *string
+	if command.RoutingTrace != nil {
+		if data, err := json.Marshal(command.RoutingTrace); err == nil {
+			text := string(data)
+			routingTraceJSON = &text
+		}
+	}
 	var notificationID int64
 	err := dbc.QueryRow(ctx, `
 		INSERT INTO notifications(
-			problem_id, type, recipient, chat_id, status, created_at, ai_summary, ai_recommendation)
-		VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7)
+			problem_id, type, recipient, chat_id, status, created_at, ai_summary, ai_recommendation, routing_trace_json)
+		VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8)
 		ON CONFLICT DO NOTHING
 		RETURNING id`,
 		command.ProblemID, command.Type, command.Recipient, command.ChatID, now,
-		command.AISummary, command.AIRecommendation,
+		command.AISummary, command.AIRecommendation, routingTraceJSON,
 	).Scan(&notificationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil

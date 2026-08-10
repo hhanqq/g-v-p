@@ -47,6 +47,16 @@ type delivery struct {
 	AIRecommendation      *string
 	IdempotencySuffix     string
 	RoutingTrace          any
+	// Channel — "trueconf" (по умолчанию, сохраняет поведение до Части
+	// VII ТЗ) или "email". Один Notification соответствует ровно одной
+	// строке delivery_outbox (UNIQUE(notification_id) в схеме) — поэтому
+	// параллельная доставка в оба канала не расширяет одну строку, а
+	// создаёт вторую пару Notification+outbox с тем же содержанием и
+	// каналом "email"; execCreateDelivery для этого достаточно вызвать
+	// дважды с разным Channel, схема не меняется.
+	Channel  string
+	Subject  *string
+	BodyHTML *string
 }
 
 // RecipientDecision — один получатель после применения доступности к
@@ -272,21 +282,67 @@ func (planner *Planner) planNew(ctx context.Context, problemID int64) error {
 				return err
 			}
 		}
-		_, err := planner.createDelivery(ctx, delivery{
-			ProblemID: problem.ID,
-			Type:      "NEW",
-			Recipient: recipient,
-			ChatID:    "recipient:" + recipient,
-			Text:      text,
-			RoutingTrace: map[string]any{
-				"available": decision.Available, "kind": decision.Kind, "delegated_from": decision.DelegatedFrom,
-			},
-		})
+		trace := map[string]any{
+			"available": decision.Available, "kind": decision.Kind, "delegated_from": decision.DelegatedFrom,
+		}
+		if _, err := planner.createDelivery(ctx, delivery{
+			ProblemID: problem.ID, Type: "NEW", Recipient: recipient,
+			ChatID: "recipient:" + recipient, Text: text, RoutingTrace: trace,
+		}); err != nil {
+			return err
+		}
+		channels, err := planner.subscriberChannels(ctx, decision.SubscriberID)
 		if err != nil {
 			return err
 		}
+		if channels.emailEnabled && channels.email != nil {
+			subject := fmt.Sprintf("[%s] %s", stringOrDash(problem.Priority), problem.SymptomClass)
+			if _, err := planner.createDelivery(ctx, delivery{
+				ProblemID: problem.ID, Type: "NEW", Recipient: *channels.email,
+				ChatID: "email:" + *channels.email, Channel: "email",
+				Subject: &subject, Text: text, RoutingTrace: trace,
+			}); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
+}
+
+type subscriberChannelPrefs struct {
+	trueconfEnabled, emailEnabled bool
+	email                         *string
+}
+
+// subscriberChannels — раздел VII ТЗ: параллельная доставка в оба канала
+// на основе предпочтений сотрудника (subscribers.trueconf_enabled/
+// email_enabled, миграция 0017). TrueConf-путь выше не проверяет
+// trueconf_enabled намеренно — отключение TrueConf для человека, у
+// которого это единственный канал получения NEW, увело бы уведомление в
+// никуда; email — строго дополнительный канал, не замена.
+func (planner *Planner) subscriberChannels(ctx context.Context, subscriberID int64) (subscriberChannelPrefs, error) {
+	var prefs subscriberChannelPrefs
+	var email sql.NullString
+	err := planner.pool.QueryRow(ctx,
+		`SELECT trueconf_enabled, email_enabled, email FROM subscribers WHERE id=$1`, subscriberID,
+	).Scan(&prefs.trueconfEnabled, &prefs.emailEnabled, &email)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return prefs, nil
+	}
+	if err != nil {
+		return prefs, err
+	}
+	if email.Valid && email.String != "" {
+		prefs.email = &email.String
+	}
+	return prefs, nil
+}
+
+func stringOrDash(value *string) string {
+	if value == nil {
+		return "—"
+	}
+	return *value
 }
 
 func (planner *Planner) planDuplicate(ctx context.Context, problemID, originalProblemID int64) error {
@@ -418,9 +474,13 @@ func execCreateDelivery(ctx context.Context, dbc dbTx, command delivery) (bool, 
 	// delivery_outbox — уже отправленные проблемы, остающиеся открытыми
 	// несколько тиков, спамили этой ошибкой на каждый тик. Проверяем по
 	// стабильному ключу ДО каких-либо вставок.
+	channel := command.Channel
+	if channel == "" {
+		channel = "trueconf"
+	}
 	idempotencyKey := fmt.Sprintf(
-		"trueconf:problem:%d:type:%s:recipient:%s",
-		command.ProblemID, command.Type, command.Recipient,
+		"%s:problem:%d:type:%s:recipient:%s",
+		channel, command.ProblemID, command.Type, command.Recipient,
 	)
 	if command.IdempotencySuffix != "" {
 		idempotencyKey += ":" + command.IdempotencySuffix
@@ -461,14 +521,18 @@ func execCreateDelivery(ctx context.Context, dbc dbTx, command delivery) (bool, 
 	if err != nil {
 		return false, fmt.Errorf("insert notification: %w", err)
 	}
+	parseMode := "HTML"
+	if channel == "email" {
+		parseMode = "PLAIN"
+	}
 	_, err = dbc.Exec(ctx, `
 		INSERT INTO delivery_outbox(
 			notification_id, contract_version, channel, idempotency_key,
 			recipient, provider_chat_id, reply_to_notification_id, text,
-			parse_mode, status, attempts, available_at, created_at)
-		VALUES ($1, 1, 'trueconf', $2, $3, $4, $5, $6, 'HTML', 'pending', 0, $7, $7)`,
-		notificationID, idempotencyKey, command.Recipient, command.ProviderChatID,
-		command.ReplyToNotificationID, command.Text, now,
+			subject, body_html, parse_mode, status, attempts, available_at, created_at)
+		VALUES ($1, 1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', 0, $11, $11)`,
+		notificationID, channel, idempotencyKey, command.Recipient, command.ProviderChatID,
+		command.ReplyToNotificationID, command.Text, command.Subject, command.BodyHTML, parseMode, now,
 	)
 	if err != nil {
 		return false, fmt.Errorf("insert delivery outbox: %w", err)

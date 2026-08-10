@@ -250,6 +250,41 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  delivery-email:
+    # Второй канал доставки (раздел VII доп. ТЗ) — тонкий адаптер, тот же
+    # принцип границы, что у delivery-trueconf: знает только контракт
+    # delivery_outbox (channel='email') и SMTP, маршрутизацию не
+    # пересчитывает. SMTP_HOST по умолчанию — mailhog ниже (демо-катчер,
+    # реально принимает письма по SMTP и показывает их в веб-интерфейсе,
+    # без риска отправить что-то во внешний мир на пилотном стенде);
+    # реальный корпоративный SMTP подключается сменой трёх переменных,
+    # без пересборки образа — тот же принцип заменяемости, что у
+    # PostgreSQL → Postgres Pro (ARCHITECTURE.md §3).
+    build:
+      context: .
+      dockerfile: go-platform/Dockerfile
+    entrypoint: ["/usr/local/bin/delivery-email"]
+    environment:
+      DATABASE_URL: postgresql://alert:alert@postgres:5432/alert_platform
+      DELIVERY_POLL_INTERVAL_S: "2"
+      SMTP_HOST: ${SMTP_HOST:-mailhog}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-dispatcher@gpn-dispatcher.local}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  mailhog:
+    # Демо-SMTP-катчер (реальный SMTP-сервер + веб-UI просмотра писем,
+    # http://127.0.0.1:8025) — заменяется реальным корпоративным SMTP
+    # через SMTP_HOST/PORT/USERNAME/PASSWORD у delivery-email без
+    # пересборки. Не часть боевого контура, только для проверки, что
+    # Email реально уходит по протоколу, а не в лог.
+    image: mailhog/mailhog:v1.0.1
+    ports: ["127.0.0.1:8025:8025", "127.0.0.1:1025:1025"]
+
   redpanda:
     # Kafka-wire-совместимая шина для потока change_events (история
     # изменений объектов/сотрудников/групп/источников). Один узел,

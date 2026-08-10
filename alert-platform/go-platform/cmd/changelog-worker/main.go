@@ -1,11 +1,13 @@
-// changelog-worker — два независимых, но живущих в одном процессе
-// потока (меньше сервисов в docker-compose при той же наблюдаемости):
+// changelog-worker — до трёх независимых, но живущих в одном процессе
+// потоков (меньше сервисов в docker-compose при той же наблюдаемости):
 // (1) relay переносит несинхронизированные строки Postgres.change_events
 // в Kafka-топик change_events.v1; (2) sink — consumer-group этого же
-// топика, батчами пишущий в ClickHouse для low-code поиска. Ни один из
-// двух никогда не встаёт между шлюзом и pipeline-worker'ом — оба строго
-// downstream, отставание или недоступность Redpanda/ClickHouse не
-// влияет на приём событий или доставку уведомлений.
+// топика, батчами пишущий в ClickHouse для low-code поиска; (3) datalake
+// — опциональный (только если задан MINIO_ENDPOINT) вотермарк-tailer
+// Signal -> MinIO, раздел «История изменений», фаза Data Lake. Ни один
+// из потоков никогда не встаёт между шлюзом и pipeline-worker'ом — все
+// строго downstream, отставание или недоступность Redpanda/ClickHouse/
+// MinIO не влияет на приём событий или доставку уведомлений.
 package main
 
 import (
@@ -20,6 +22,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 
@@ -79,8 +83,32 @@ func main() {
 	relay := changelog.NewRelay(pool, producer, topic)
 	sink := changelog.NewSink(consumer, ch)
 
+	// Data Lake (MinIO) — полностью опционально. Не задан MINIO_ENDPOINT —
+	// поток просто не запускается, ни на что остальное не влияет.
+	var dataLake *changelog.DataLakeSink
+	if endpoint := os.Getenv("MINIO_ENDPOINT"); endpoint != "" {
+		minioClient, err := minio.New(endpoint, &minio.Options{
+			Creds:  credentials.NewStaticV4(required("MINIO_ACCESS_KEY"), required("MINIO_SECRET_KEY"), ""),
+			Secure: false,
+		})
+		if err != nil {
+			log.Printf("changelog-worker: minio client: %v (Data Lake отключён)", err)
+		} else {
+			bucket := valueOr("MINIO_BUCKET", "dispatcher-datalake")
+			candidate := changelog.NewDataLakeSink(pool, minioClient, bucket)
+			if err := candidate.EnsureBucket(ctx); err != nil {
+				log.Printf("changelog-worker: minio ensure bucket: %v (Data Lake отключён)", err)
+			} else {
+				dataLake = candidate
+			}
+		}
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
+	if dataLake != nil {
+		wg.Add(1)
+	}
 
 	go func() {
 		defer wg.Done()
@@ -108,6 +136,27 @@ func main() {
 		}
 	}()
 
+	if dataLake != nil {
+		dataLakeInterval := durationSeconds("DATALAKE_POLL_INTERVAL_S", 5)
+		go func() {
+			defer wg.Done()
+			log.Printf("changelog-worker: data lake tailer started, poll=%s", dataLakeInterval)
+			for {
+				archived, err := dataLake.Tick(ctx)
+				if err != nil {
+					log.Printf("changelog-worker: data lake tick: %v", err)
+				} else if archived > 0 {
+					log.Printf("changelog-worker: data lake archived %d signal(s) to minio", archived)
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(dataLakeInterval):
+				}
+			}
+		}()
+	}
+
 	wg.Wait()
 }
 
@@ -117,6 +166,13 @@ func required(name string) string {
 		log.Fatalf("%s is required", name)
 	}
 	return value
+}
+
+func valueOr(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
 }
 
 func isTopicExistsErr(err error) bool {

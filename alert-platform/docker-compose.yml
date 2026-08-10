@@ -279,10 +279,33 @@ services:
         condition: service_healthy
     restart: "no"
 
+  minio:
+    # Data Lake для сырого архива Signal (раздел «История изменений»,
+    # опциональная фаза 5) — долгосрочное хранение/переобработка/ML/RAG
+    # поверх уже существующего WORM-журнала signals, не замена ему.
+    # S3-совместимо, open-source, без внешнего облака — тот же принцип,
+    # что у остального стека.
+    image: minio/minio:RELEASE.2025-04-08T15-41-24Z
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-alert}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-alert12345}
+    ports: ["127.0.0.1:9002:9000", "127.0.0.1:9003:9001"]
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 512m
+
   changelog-worker:
-    # Postgres.change_events -> Redpanda -> ClickHouse. Строго побочный
-    # контур: никогда не встаёт между шлюзом и pipeline-worker'ом,
-    # отставание/недоступность не влияет на приём событий или доставку.
+    # Postgres.change_events -> Redpanda -> ClickHouse, плюс (опционально,
+    # если задан MINIO_ENDPOINT) вотермарк-tailer Signal -> MinIO. Строго
+    # побочный контур: никогда не встаёт между шлюзом и pipeline-worker'ом,
+    # отставание/недоступность любой части не влияет на приём событий или
+    # доставку — см. живую проверку в SECURITY.md/INFRASTRUCTURE.md.
     build:
       context: .
       dockerfile: go-platform/Dockerfile
@@ -292,6 +315,11 @@ services:
       KAFKA_BROKERS: redpanda:9092
       CLICKHOUSE_URL: clickhouse://alert:${CLICKHOUSE_PASSWORD:-alert}@clickhouse:9000/alerting
       CHANGELOG_POLL_INTERVAL_S: "2"
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-alert}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-alert12345}
+      MINIO_BUCKET: dispatcher-datalake
+      DATALAKE_POLL_INTERVAL_S: "5"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -299,8 +327,11 @@ services:
         condition: service_completed_successfully
       redpanda:
         condition: service_healthy
+      minio:
+        condition: service_healthy
 
 volumes:
   pgdata:
   redpandadata:
   clickhousedata:
+  miniodata:

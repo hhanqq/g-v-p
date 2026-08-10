@@ -73,8 +73,15 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
-		IdleTimeout:       60 * time.Second,
+		// 30с было мало: /api/ai-selftest (проксируется на demo-runner) и
+		// /api/employees/{id}/subscription-suggestion оба зовут Ollama
+		// синхронно, холодный старт log-reader (30B) измерен вживую до
+		// ~49с — сервер обрывал соединение на середине ответа ("empty
+		// reply from server"), раньше, чем успевал сработать таймаут
+		// самого Ollama-клиента (35с). Найдено при разборе критерия
+		// «Инфраструктура» 2026-08-10.
+		WriteTimeout: 90 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()

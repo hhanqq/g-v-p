@@ -12,76 +12,140 @@ import (
 )
 
 type activeScenario struct {
-	id, name, graphJSON string
+	id        string
+	name      string
+	graphJSON string
+	version   int
 }
 
 func (planner *Planner) planScenarios(ctx context.Context) error {
-	rows, err := planner.pool.Query(ctx, `SELECT id::text,name,graph_json FROM scenarios WHERE status='active' ORDER BY id`)
+	rows, err := planner.pool.Query(ctx, `SELECT id::text,name,graph_json,version FROM scenarios WHERE status='active' ORDER BY id`)
 	if err != nil {
 		return err
 	}
 	var scenarios []activeScenario
 	for rows.Next() {
 		var item activeScenario
-		if err := rows.Scan(&item.id, &item.name, &item.graphJSON); err != nil {
+		if err := rows.Scan(&item.id, &item.name, &item.graphJSON, &item.version); err != nil {
 			rows.Close()
 			return err
 		}
 		scenarios = append(scenarios, item)
 	}
 	rows.Close()
-	if len(scenarios) == 0 {
-		return nil
-	}
-	rows, err = planner.pool.Query(ctx, `SELECT id FROM problems WHERE status IN ('OPEN','FLAPPING') ORDER BY id`)
-	if err != nil {
-		return err
-	}
-	var problemIDs []int64
-	for rows.Next() {
-		var id int64
-		_ = rows.Scan(&id)
-		problemIDs = append(problemIDs, id)
-	}
-	rows.Close()
-	for _, definition := range scenarios {
-		graph, ok := scenario.Parse(definition.graphJSON)
-		if !ok {
-			continue
+	if len(scenarios) > 0 {
+		rows, err = planner.pool.Query(ctx, `SELECT id FROM problems WHERE status IN ('OPEN','FLAPPING') ORDER BY id`)
+		if err != nil {
+			return err
 		}
-		scenarioID, _ := strconv.ParseInt(definition.id, 10, 64)
-		for _, problemID := range problemIDs {
-			if err := planner.advanceScenario(ctx, scenarioID, definition.name, graph, problemID); err != nil {
-				return fmt.Errorf("scenario=%d problem=%d: %w", scenarioID, problemID, err)
+		var problemIDs []int64
+		for rows.Next() {
+			var id int64
+			_ = rows.Scan(&id)
+			problemIDs = append(problemIDs, id)
+		}
+		rows.Close()
+		// Кэш разобранных графов версий на этот тик — избегает повторного
+		// SELECT+Parse одной и той же исторической версии для каждого
+		// проблемного ряда прогона, стоящего в wait на этой версии.
+		versions := make(map[[2]int64]*scenario.Graph)
+		for _, definition := range scenarios {
+			currentGraph, ok := scenario.Parse(definition.graphJSON)
+			if !ok {
+				continue
+			}
+			scenarioID, _ := strconv.ParseInt(definition.id, 10, 64)
+			versions[[2]int64{scenarioID, int64(definition.version)}] = currentGraph
+			for _, problemID := range problemIDs {
+				if err := planner.advanceScenario(ctx, scenarioID, definition.name, definition.version, currentGraph, versions, problemID); err != nil {
+					return fmt.Errorf("scenario=%d problem=%d: %w", scenarioID, problemID, err)
+				}
 			}
 		}
 	}
-	return nil
+	// Прогон, чья проблема перестала быть открытой (резолвнулась, пока
+	// прогон стоял, например, в wait), больше никогда не попадает в
+	// problemIDs выше — без этой подчистки он навсегда застревал бы в
+	// status='running', даже не пытаясь дойти до терминального состояния.
+	// Найдено живьём при аудите (Этап 0), не было в исходном плане.
+	_, err = planner.pool.Exec(ctx, `
+		UPDATE scenario_runs SET status='done'
+		WHERE status='running' AND problem_id IN (SELECT id FROM problems WHERE status NOT IN ('OPEN','FLAPPING'))`)
+	return err
 }
 
-func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, scenarioName string, graph *scenario.Graph, problemID int64) error {
+// resolveScenarioGraph возвращает граф, под которым нужно продолжать
+// УЖЕ существующий прогон — версию, закреплённую за ним при создании
+// (run.scenario_version), а не текущий (возможно, с тех пор
+// отредактированный) граф сценария. currentGraph/currentVersion —
+// быстрый путь, когда прогон ещё не отстал от живой версии.
+func (planner *Planner) resolveScenarioGraph(ctx context.Context, scenarioID int64, currentVersion int, currentGraph *scenario.Graph, versions map[[2]int64]*scenario.Graph, runVersion int) (*scenario.Graph, error) {
+	if runVersion == currentVersion {
+		return currentGraph, nil
+	}
+	key := [2]int64{scenarioID, int64(runVersion)}
+	if cached, ok := versions[key]; ok {
+		return cached, nil
+	}
+	var graphJSON string
+	if err := planner.pool.QueryRow(ctx, `SELECT graph_json FROM scenario_versions WHERE scenario_id=$1 AND version=$2`, scenarioID, runVersion).Scan(&graphJSON); err != nil {
+		return nil, err
+	}
+	graph, ok := scenario.Parse(graphJSON)
+	if !ok {
+		// Не должно происходить — снэпшот пишется из уже провалидированного
+		// (Parse-проверенного на активации) графа. Явная ошибка, а не
+		// тихое зависание прогона, если это всё же случится.
+		return nil, fmt.Errorf("pinned graph_json for scenario=%d version=%d failed to parse", scenarioID, runVersion)
+	}
+	versions[key] = graph
+	return graph, nil
+}
+
+func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, scenarioName string, currentVersion int, currentGraph *scenario.Graph, versions map[[2]int64]*scenario.Graph, problemID int64) error {
 	problem, err := planner.loadProblem(ctx, problemID)
 	if err != nil {
 		return err
 	}
-	condition := graph.Nodes[graph.RootID]
-	if !planner.matchesScenarioCondition(ctx, problem, condition.Data) {
-		return nil
-	}
 	now := time.Now().UTC()
-	_, err = planner.pool.Exec(ctx, `
-		INSERT INTO scenario_runs(scenario_id,problem_id,current_node_id,status,step_entered_at,created_at,notified_count)
-		VALUES($1,$2,$3,'running',$4,$4,0) ON CONFLICT(scenario_id,problem_id) DO NOTHING`, scenarioID, problemID, graph.RootID, now)
-	if err != nil {
-		return err
-	}
 	var runID int64
 	var current, status string
 	var enteredAt time.Time
 	var notified int
-	err = planner.pool.QueryRow(ctx, `SELECT id,current_node_id,status,step_entered_at,notified_count FROM scenario_runs WHERE scenario_id=$1 AND problem_id=$2`, scenarioID, problemID).Scan(&runID, &current, &status, &enteredAt, &notified)
-	if err != nil || status != "running" {
+	var runVersion int
+	err = planner.pool.QueryRow(ctx, `SELECT id,current_node_id,status,step_entered_at,notified_count,scenario_version FROM scenario_runs WHERE scenario_id=$1 AND problem_id=$2`, scenarioID, problemID).Scan(&runID, &current, &status, &enteredAt, &notified, &runVersion)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
+	}
+	graph := currentGraph
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Условие решает только создание НОВОГО прогона — уже идущий
+		// прогон продолжается независимо от того, матчится ли текущее
+		// (возможно отредактированное) условие, он живёт по контракту
+		// своей закреплённой версии, не живой.
+		condition := currentGraph.Nodes[currentGraph.RootID]
+		if !planner.matchesScenarioCondition(ctx, problem, condition.Data) {
+			return nil
+		}
+		_, err = planner.pool.Exec(ctx, `
+			INSERT INTO scenario_runs(scenario_id,problem_id,current_node_id,status,step_entered_at,created_at,notified_count,scenario_version)
+			VALUES($1,$2,$3,'running',$4,$4,0,$5) ON CONFLICT(scenario_id,problem_id) DO NOTHING`,
+			scenarioID, problemID, currentGraph.RootID, now, currentVersion)
+		if err != nil {
+			return err
+		}
+		err = planner.pool.QueryRow(ctx, `SELECT id,current_node_id,status,step_entered_at,notified_count,scenario_version FROM scenario_runs WHERE scenario_id=$1 AND problem_id=$2`, scenarioID, problemID).Scan(&runID, &current, &status, &enteredAt, &notified, &runVersion)
+		if err != nil {
+			return err
+		}
+	} else {
+		graph, err = planner.resolveScenarioGraph(ctx, scenarioID, currentVersion, currentGraph, versions, runVersion)
+		if err != nil {
+			return err
+		}
+	}
+	if status != "running" {
+		return nil
 	}
 	recipients, err := planner.resolveRecipients(ctx, problem)
 	if err != nil {
@@ -115,6 +179,9 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		}
 	}
 	outcome := scenario.Advance(current, enteredAt, graph, problemStatus(problem), facts, now)
+	if err := planner.recordScenarioSteps(ctx, runID, scenarioID, runVersion, problemID, outcome.Trace, now); err != nil {
+		return err
+	}
 	switch outcome.Kind {
 	case "wait":
 		_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET current_node_id=$2,step_entered_at=$3 WHERE id=$1`, runID, outcome.CurrentNodeID, outcome.EnteredAt)
@@ -173,6 +240,22 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 			}
 		}
 		return nil
+	}
+	return nil
+}
+
+// recordScenarioSteps пишет трассу реально пройденных узлов (пусто для
+// тиков, где прогон просто ещё ждёт) — раздел «Аналитика исполнения
+// сценариев»: без этой таблицы у прогона переживает только текущий
+// узел, восстановить путь целиком нельзя.
+func (planner *Planner) recordScenarioSteps(ctx context.Context, runID, scenarioID int64, version int, problemID int64, trace []scenario.StepTrace, now time.Time) error {
+	for _, step := range trace {
+		if _, err := planner.pool.Exec(ctx, `
+			INSERT INTO scenario_run_steps(run_id,scenario_id,scenario_version,problem_id,node_id,node_type,branch,entered_at,created_at)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+			runID, scenarioID, version, problemID, step.NodeID, step.NodeType, step.Branch, now, now); err != nil {
+			return err
+		}
 	}
 	return nil
 }

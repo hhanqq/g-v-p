@@ -198,28 +198,7 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.changeHistorySearch)
 		return
 	}
-	if request.Method == http.MethodGet && path == "/api/scenarios" {
-		server.withAuth(response, request, server.listScenarios)
-		return
-	}
-	if request.Method == http.MethodPost && path == "/api/scenarios" {
-		server.withAuth(response, request, server.createScenario)
-		return
-	}
-	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/scenarios/") {
-		server.withAuth(response, request, server.getScenario)
-		return
-	}
-	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/scenarios/") {
-		server.withAuth(response, request, server.updateScenario)
-		return
-	}
-	if request.Method == http.MethodPost && strings.HasSuffix(path, "/activate") && strings.HasPrefix(path, "/api/scenarios/") {
-		server.withAuth(response, request, server.activateScenario)
-		return
-	}
-	if request.Method == http.MethodPost && strings.HasSuffix(path, "/deactivate") && strings.HasPrefix(path, "/api/scenarios/") {
-		server.withAuth(response, request, server.deactivateScenario)
+	if server.routeScenarios(response, request, path) {
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/sla-rules" {

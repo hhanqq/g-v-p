@@ -112,11 +112,21 @@ func Parse(raw string) (*Graph, bool) {
 	return &Graph{RootID: roots[0], Nodes: nodes, Edges: edges}, true
 }
 
+// StepTrace — один реально пройденный узел за вызов Advance (в отличие
+// от тиков, когда узел ack/wait переоценивается, но переход не
+// происходит — те тики трассу не пополняют).
+type StepTrace struct {
+	NodeID   string
+	NodeType string
+	Branch   string // "default" | "yes" | "no" | "elapsed"
+}
+
 type Outcome struct {
 	Kind          string
 	Step          *Node
 	CurrentNodeID string
 	EnteredAt     time.Time
+	Trace         []StepTrace
 }
 
 func Advance(current string, enteredAt time.Time, graph *Graph, problemStatus string, facts map[string]bool, now time.Time) Outcome {
@@ -131,6 +141,7 @@ func Advance(current string, enteredAt time.Time, graph *Graph, problemStatus st
 		}
 		nodeID, enteredAt = *next, now
 	}
+	var trace []StepTrace
 	for range len(graph.Nodes) + 1 {
 		node := graph.Nodes[nodeID]
 		switch node.Type {
@@ -140,15 +151,17 @@ func Advance(current string, enteredAt time.Time, graph *Graph, problemStatus st
 			if next != nil {
 				nextID = *next
 			}
-			return Outcome{Kind: "notify", Step: &node, CurrentNodeID: nextID, EnteredAt: now}
+			trace = append(trace, StepTrace{NodeID: nodeID, NodeType: node.Type, Branch: "default"})
+			return Outcome{Kind: "notify", Step: &node, CurrentNodeID: nextID, EnteredAt: now, Trace: trace}
 		case "wait":
 			minutes, _ := node.Data["minutes"].(float64)
 			if now.Sub(enteredAt) < time.Duration(minutes)*time.Minute {
-				return Outcome{Kind: "wait", CurrentNodeID: nodeID, EnteredAt: enteredAt}
+				return Outcome{Kind: "wait", CurrentNodeID: nodeID, EnteredAt: enteredAt, Trace: trace}
 			}
+			trace = append(trace, StepTrace{NodeID: nodeID, NodeType: node.Type, Branch: "elapsed"})
 			next := graph.Edges[nodeID]["default"]
 			if next == nil {
-				return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt}
+				return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt, Trace: trace}
 			}
 			nodeID, enteredAt = *next, now
 		case "ack_check", "subscription_check":
@@ -156,14 +169,15 @@ func Advance(current string, enteredAt time.Time, graph *Graph, problemStatus st
 			if facts[nodeID] {
 				branch = "yes"
 			}
+			trace = append(trace, StepTrace{NodeID: nodeID, NodeType: node.Type, Branch: branch})
 			next := graph.Edges[nodeID][branch]
 			if next == nil {
-				return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt}
+				return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt, Trace: trace}
 			}
 			nodeID, enteredAt = *next, now
 		default:
-			return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt}
+			return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt, Trace: trace}
 		}
 	}
-	return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt}
+	return Outcome{Kind: "done", CurrentNodeID: nodeID, EnteredAt: enteredAt, Trace: trace}
 }

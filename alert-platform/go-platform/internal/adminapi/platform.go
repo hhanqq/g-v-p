@@ -7,9 +7,11 @@ import (
 	"errors"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/scenario"
 	"github.com/jackc/pgx/v5"
 )
@@ -187,6 +189,57 @@ func decodeScenario(response http.ResponseWriter, request *http.Request) (scenar
 	return payload, true
 }
 
+// listScenarioVersions/getScenarioVersion — снэпшоты graph_json на
+// каждую правку (раздел «Аналитика исполнения сценариев»): прогон,
+// стоящий в wait, скреплён с версией, под которой он начал движение
+// (internal/planner/automation.go), а не с текущим, возможно уже
+// отредактированным графом — эти ручки дают посмотреть именно тот
+// исторический граф, а не только самый свежий.
+func (server *Server) listScenarioVersions(response http.ResponseWriter, request *http.Request, id int64) {
+	rows, err := server.pool.Query(request.Context(), `SELECT version,name,created_by,created_at FROM scenario_versions WHERE scenario_id=$1 ORDER BY version DESC`, id)
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var version int
+		var name string
+		var createdBy sql.NullString
+		var createdAt time.Time
+		if err := rows.Scan(&version, &name, &createdBy, &createdAt); err != nil {
+			writeError(response, http.StatusInternalServerError, "scan scenario versions")
+			return
+		}
+		items = append(items, map[string]any{"version": version, "name": name, "created_by": nullableString(createdBy), "created_at": formatISO(createdAt)})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(response, http.StatusInternalServerError, "load scenario versions")
+		return
+	}
+	writeJSON(response, http.StatusOK, items)
+}
+
+func (server *Server) getScenarioVersion(response http.ResponseWriter, request *http.Request, id, version int64) {
+	var name, graphJSON string
+	var description, createdBy sql.NullString
+	var createdAt time.Time
+	err := server.pool.QueryRow(request.Context(), `SELECT name,description,graph_json,created_by,created_at FROM scenario_versions WHERE scenario_id=$1 AND version=$2`, id, version).Scan(&name, &description, &graphJSON, &createdBy, &createdAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeError(response, http.StatusNotFound, "Версия сценария не найдена")
+		return
+	}
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"scenario_id": id, "version": version, "name": name, "description": nullableString(description),
+		"graph_json": graphJSON, "created_by": nullableString(createdBy), "created_at": formatISO(createdAt),
+	})
+}
+
 func (server *Server) getScenario(response http.ResponseWriter, request *http.Request, _ map[string]any) {
 	id, ok := scenarioID(normalizePath(request.URL.Path))
 	if !ok {
@@ -227,6 +280,11 @@ func (server *Server) createScenario(response http.ResponseWriter, request *http
 	var id int64
 	err = tx.QueryRow(request.Context(), `INSERT INTO scenarios(name,description,graph_json,status,created_by,created_at,updated_at) VALUES($1,$2,$3,'draft',$4,$5,$5) RETURNING id`, strings.TrimSpace(*payload.Name), payload.Description, *payload.GraphJSON, actor, now).Scan(&id)
 	if err == nil {
+		_, err = tx.Exec(request.Context(), `
+			INSERT INTO scenario_versions(scenario_id,version,name,description,graph_json,created_by,created_at)
+			VALUES($1,1,$2,$3,$4,$5,$6)`, id, strings.TrimSpace(*payload.Name), payload.Description, *payload.GraphJSON, actor, now)
+	}
+	if err == nil {
 		_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'create_scenario',$2,$3)`, actor, strings.TrimSpace(*payload.Name), now)
 	}
 	if err != nil || tx.Commit(request.Context()) != nil {
@@ -236,7 +294,7 @@ func (server *Server) createScenario(response http.ResponseWriter, request *http
 	writeJSON(response, http.StatusCreated, map[string]any{"ok": true, "id": id})
 }
 
-func (server *Server) updateScenario(response http.ResponseWriter, request *http.Request, _ map[string]any) {
+func (server *Server) updateScenario(response http.ResponseWriter, request *http.Request, user map[string]any) {
 	id, ok := scenarioID(normalizePath(request.URL.Path))
 	if !ok {
 		writeError(response, http.StatusUnprocessableEntity, "invalid scenario id")
@@ -246,11 +304,27 @@ func (server *Server) updateScenario(response http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	var status string
-	err := server.pool.QueryRow(request.Context(), `
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	now := time.Now().UTC()
+	var status, name string
+	var description sql.NullString
+	var newVersion int
+	// version бампается только вместе с graph_json — правки одного лишь
+	// имени/описания не создают новый снэпшот (нечего версионировать: у
+	// прогонов, стоящих в wait, скрепление за версией имеет смысл только
+	// когда меняется сам граф исполнения).
+	err = tx.QueryRow(ctx, `
 		UPDATE scenarios SET name=COALESCE($2,name),description=COALESCE($3,description),
-		graph_json=COALESCE($4,graph_json),status=CASE WHEN $4::text IS NOT NULL THEN 'draft' ELSE status END,updated_at=$5
-		WHERE id=$1 RETURNING status`, id, payload.Name, payload.Description, payload.GraphJSON, time.Now().UTC()).Scan(&status)
+		graph_json=COALESCE($4,graph_json),status=CASE WHEN $4::text IS NOT NULL THEN 'draft' ELSE status END,
+		version=CASE WHEN $4::text IS NOT NULL THEN version+1 ELSE version END,updated_at=$5
+		WHERE id=$1 RETURNING status,name,description,version`,
+		id, payload.Name, payload.Description, payload.GraphJSON, now).Scan(&status, &name, &description, &newVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(response, http.StatusNotFound, "Сценарий не найден")
 		return
@@ -259,7 +333,29 @@ func (server *Server) updateScenario(response http.ResponseWriter, request *http
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	writeJSON(response, http.StatusOK, map[string]any{"ok": true, "status": status})
+	if payload.GraphJSON != nil {
+		actor, _ := user["username"].(string)
+		if _, err = tx.Exec(ctx, `
+			INSERT INTO scenario_versions(scenario_id,version,name,description,graph_json,created_by,created_at)
+			VALUES($1,$2,$3,$4,$5,$6,$7)`,
+			id, newVersion, name, description, *payload.GraphJSON, actor, now); err != nil {
+			writeError(response, http.StatusServiceUnavailable, "database unavailable")
+			return
+		}
+		if err = changelog.Record(ctx, tx, changelog.Event{
+			OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "scenario.update_graph",
+			ResourceType: "scenario", ResourceID: strconv.FormatInt(id, 10),
+			After: map[string]any{"version": newVersion, "name": name},
+		}); err != nil {
+			writeError(response, http.StatusServiceUnavailable, "database unavailable")
+			return
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{"ok": true, "status": status, "version": newVersion})
 }
 
 func (server *Server) activateScenario(response http.ResponseWriter, request *http.Request, user map[string]any) {

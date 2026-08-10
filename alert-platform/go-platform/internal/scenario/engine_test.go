@@ -205,4 +205,46 @@ func TestAdvanceMultipleDecisionsInOneTick(t *testing.T) {
 	if out.Kind != "notify" || out.Step == nil || out.Step.ID != "final" {
 		t.Fatalf("expected to walk through both decisions to 'final' in one tick: %+v", out)
 	}
+	if len(out.Trace) != 3 {
+		t.Fatalf("expected 3 trace entries (d1, d2, final), got %d: %+v", len(out.Trace), out.Trace)
+	}
+	wantTrace := []StepTrace{
+		{NodeID: "d1", NodeType: "ack_check", Branch: "yes"},
+		{NodeID: "d2", NodeType: "subscription_check", Branch: "yes"},
+		{NodeID: "final", NodeType: "notify", Branch: "default"},
+	}
+	for i, want := range wantTrace {
+		if out.Trace[i] != want {
+			t.Fatalf("trace[%d] = %+v, want %+v", i, out.Trace[i], want)
+		}
+	}
+}
+
+func TestAdvanceTraceEmptyWhenStillWaiting(t *testing.T) {
+	t0 := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
+	graph := linearGraph(t)
+	out := Advance("w1", t0, graph, "OPEN", nil, t0.Add(10*time.Minute))
+	if len(out.Trace) != 0 {
+		t.Fatalf("a tick that doesn't transition should not append trace entries: %+v", out.Trace)
+	}
+}
+
+func TestAdvanceTraceRecordsElapsedWait(t *testing.T) {
+	// linearGraph continues wait -> n2 (notify) once the deadline elapses,
+	// so a single Advance call walks both nodes in the same tick.
+	t0 := time.Date(2026, 8, 6, 10, 0, 0, 0, time.UTC)
+	graph := linearGraph(t)
+	out := Advance("w1", t0, graph, "OPEN", nil, t0.Add(31*time.Minute))
+	want := []StepTrace{
+		{NodeID: "w1", NodeType: "wait", Branch: "elapsed"},
+		{NodeID: "n2", NodeType: "notify", Branch: "default"},
+	}
+	if len(out.Trace) != len(want) {
+		t.Fatalf("expected elapsed-wait followed by notify trace entries, got: %+v", out.Trace)
+	}
+	for i := range want {
+		if out.Trace[i] != want[i] {
+			t.Fatalf("trace[%d] = %+v, want %+v", i, out.Trace[i], want[i])
+		}
+	}
 }

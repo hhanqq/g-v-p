@@ -1,0 +1,343 @@
+name: 🚦 Quality Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: 🐹 Go · tests + vet
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: alert-platform/go-platform
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: alert-platform/go-platform/go.mod
+          cache-dependency-path: alert-platform/go-platform/go.sum
+
+      - name: Run tests with the race detector
+        id: go_tests
+        run: |
+          go test -race -count=1 -json ./... > go-test.json
+
+      - name: Run built-in static analysis
+        id: go_vet
+        if: always()
+        run: go vet ./...
+
+      - name: Publish Go test summary
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.go_tests.outcome }}
+          VET_OUTCOME: ${{ steps.go_vet.outcome }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          icons = {"success": "✅", "failure": "❌", "skipped": "⏭️", "cancelled": "🛑"}
+          tests = {}
+          packages = {}
+          output = []
+          path = Path("go-test.json")
+          if path.exists():
+              for line in path.read_text().splitlines():
+                  try:
+                      event = json.loads(line)
+                  except json.JSONDecodeError:
+                      continue
+                  action = event.get("Action")
+                  package = event.get("Package")
+                  test = event.get("Test")
+                  if event.get("Output"):
+                      output.append(event["Output"].rstrip())
+                  if test and action in {"pass", "fail", "skip"}:
+                      tests[(package, test)] = action
+                  elif package and not test and action in {"pass", "fail", "skip"}:
+                      packages[package] = (action, event.get("Elapsed", 0))
+
+          passed = sum(result == "pass" for result in tests.values())
+          failed = sum(result == "fail" for result in tests.values())
+          skipped = sum(result == "skip" for result in tests.values())
+          duration = sum(elapsed for _, elapsed in packages.values())
+          failed_tests = [f"`{package} / {test}`" for (package, test), result in tests.items() if result == "fail"]
+          failed_packages = [f"`{package}`" for package, (result, _) in packages.items() if result == "fail"]
+          test_outcome = os.environ.get("TEST_OUTCOME", "skipped")
+          vet_outcome = os.environ.get("VET_OUTCOME", "skipped")
+
+          lines = [
+              "# 🐹 Go quality report",
+              "",
+              f"> {icons.get(test_outcome, '❔')} **Tests:** {test_outcome} &nbsp;·&nbsp; {icons.get(vet_outcome, '❔')} **go vet:** {vet_outcome}",
+              "",
+              "| Metric | Result |",
+              "|---|---:|",
+              f"| Packages checked | **{len(packages)}** |",
+              f"| Tests passed | **{passed}** |",
+              f"| Tests failed | **{failed}** |",
+              f"| Tests skipped | **{skipped}** |",
+              f"| Package time (sum) | **{duration:.2f}s** |",
+              "",
+              "Race detection is enabled; static analysis uses the built-in `go vet` only.",
+          ]
+          if failed_tests:
+              lines += ["", "## Failed tests", "", *[f"- {name}" for name in failed_tests[:20]]]
+          if failed_packages:
+              lines += ["", "## Failed packages", "", *[f"- {name}" for name in failed_packages[:20]]]
+          if test_outcome == "failure" and output:
+              lines += ["", "<details><summary>Failure excerpt</summary>", "", "```text", *output[-80:], "```", "", "</details>"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n".join(lines) + "\n")
+          PY
+
+  python:
+    name: 🐍 Python · tests + Ruff
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: alert-platform
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            alert-platform/requirements.txt
+            alert-platform/requirements-dev.txt
+            alert-platform/datagen/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt -r requirements-dev.txt ruff==0.9.10
+
+      - name: Check Python syntax
+        id: python_syntax
+        run: python -m compileall -q packages services scripts tests
+
+      - name: Run lightweight Ruff checks
+        id: python_lint
+        if: always()
+        run: ruff check --output-format=github --select=E9,F63,F7,F82 packages services scripts tests
+
+      - name: Run tests
+        id: python_tests
+        if: always()
+        run: python -m pytest -q --junitxml=pytest.xml > pytest.log 2>&1
+
+      - name: Publish Python test summary
+        if: always()
+        env:
+          SYNTAX_OUTCOME: ${{ steps.python_syntax.outcome }}
+          LINT_OUTCOME: ${{ steps.python_lint.outcome }}
+          TEST_OUTCOME: ${{ steps.python_tests.outcome }}
+        run: |
+          python - <<'PY'
+          import os
+          import html
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          icons = {"success": "✅", "failure": "❌", "skipped": "⏭️", "cancelled": "🛑"}
+          metrics = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0, "time": 0.0}
+          failures = []
+          report = Path("pytest.xml")
+          if report.exists():
+              root = ET.parse(report).getroot()
+              suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+              if root.tag == "testsuites" and root.attrib.get("tests") is not None:
+                  suites = [root]
+              for suite in suites:
+                  for key in ("tests", "failures", "errors", "skipped"):
+                      metrics[key] += int(suite.attrib.get(key, 0))
+                  metrics["time"] += float(suite.attrib.get("time", 0))
+              for case in root.iter("testcase"):
+                  if case.find("failure") is not None or case.find("error") is not None:
+                      failures.append(f"`{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}`")
+
+          syntax = os.environ.get("SYNTAX_OUTCOME", "skipped")
+          lint = os.environ.get("LINT_OUTCOME", "skipped")
+          tests = os.environ.get("TEST_OUTCOME", "skipped")
+          passed = metrics["tests"] - metrics["failures"] - metrics["errors"] - metrics["skipped"]
+          lines = [
+              "# 🐍 Python quality report",
+              "",
+              f"> {icons.get(tests, '❔')} **Tests:** {tests} &nbsp;·&nbsp; {icons.get(lint, '❔')} **Ruff:** {lint} &nbsp;·&nbsp; {icons.get(syntax, '❔')} **Syntax:** {syntax}",
+              "",
+              "| Metric | Result |",
+              "|---|---:|",
+              f"| Passed | **{max(passed, 0)}** |",
+              f"| Failed | **{metrics['failures'] + metrics['errors']}** |",
+              f"| Skipped | **{metrics['skipped']}** |",
+              f"| Duration | **{metrics['time']:.2f}s** |",
+              "",
+              "Ruff checks only runtime-risk rules (`E9`, `F63`, `F7`, `F82`); style rules are intentionally disabled.",
+          ]
+          if failures:
+              lines += ["", "## Failed tests", "", *[f"- {name}" for name in failures[:20]]]
+          log = Path("pytest.log")
+          if tests == "failure" and log.exists():
+              excerpt = html.escape("\n".join(log.read_text(errors="replace").splitlines()[-80:]))
+              lines += ["", "<details><summary>Failure excerpt</summary>", "", f"<pre>{excerpt}</pre>", "", "</details>"]
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
+              summary.write("\n".join(lines) + "\n")
+          PY
+
+  web:
+    name: ⚡ Web · typecheck + build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: alert-platform/web
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: alert-platform/web/package-lock.json
+
+      - name: Install dependencies
+        id: web_install
+        run: npm ci --no-audit --fund=false
+
+      - name: Type-check and build
+        id: web_build
+        run: npm run build > web-build.log 2>&1
+
+      - name: Publish frontend build summary
+        if: always()
+        env:
+          INSTALL_OUTCOME: ${{ steps.web_install.outcome }}
+          BUILD_OUTCOME: ${{ steps.web_build.outcome }}
+        run: |
+          icon() {
+            case "$1" in
+              success) printf '✅' ;;
+              failure) printf '❌' ;;
+              skipped) printf '⏭️' ;;
+              cancelled) printf '🛑' ;;
+              *) printf '❔' ;;
+            esac
+          }
+          source_files="$(find src -type f \( -name '*.ts' -o -name '*.tsx' \) | wc -l | tr -d ' ')"
+          bundle_size="not built"
+          if [ -d dist ]; then
+            bundle_size="$(du -sh dist | cut -f1)"
+          fi
+          {
+            echo '# ⚡ Frontend build report'
+            echo
+            echo "> $(icon "$BUILD_OUTCOME") **Production build:** $BUILD_OUTCOME &nbsp;·&nbsp; $(icon "$INSTALL_OUTCOME") **npm ci:** $INSTALL_OUTCOME"
+            echo
+            echo '| Metric | Result |'
+            echo '|---|---:|'
+            echo "| TypeScript source files | **$source_files** |"
+            echo "| Production bundle | **$bundle_size** |"
+            echo "| Node.js | **$(node --version 2>/dev/null || echo unavailable)** |"
+            if [ -d dist ]; then
+              echo
+              echo '## Largest generated assets'
+              echo
+              echo '| Asset | Size |'
+              echo '|---|---:|'
+              find dist -type f -printf '%s|%p\n' | sort -rn | head -n 8 | while IFS='|' read -r bytes path; do
+                echo "| \`${path#dist/}\` | $(numfmt --to=iec --suffix=B "$bytes") |"
+              done
+            fi
+            if [ "$BUILD_OUTCOME" = failure ] && [ -s web-build.log ]; then
+              echo
+              echo '<details><summary>Failure excerpt</summary>'
+              echo
+              echo '```text'
+              tail -n 80 web-build.log
+              echo '```'
+              echo
+              echo '</details>'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  compose:
+    name: 🐳 Compose · config validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate Compose configuration
+        id: compose_validate
+        working-directory: alert-platform
+        run: docker compose config --quiet
+
+      - name: Inventory Compose stack
+        id: compose_inventory
+        if: always()
+        working-directory: alert-platform
+        run: |
+          docker compose config --services | sort > compose-services.txt
+          docker compose config --volumes | sort > compose-volumes.txt
+
+      - name: Publish Compose summary
+        if: always()
+        working-directory: alert-platform
+        env:
+          VALIDATE_OUTCOME: ${{ steps.compose_validate.outcome }}
+          INVENTORY_OUTCOME: ${{ steps.compose_inventory.outcome }}
+        run: |
+          icon() {
+            case "$1" in
+              success) printf '✅' ;;
+              failure) printf '❌' ;;
+              skipped) printf '⏭️' ;;
+              cancelled) printf '🛑' ;;
+              *) printf '❔' ;;
+            esac
+          }
+          service_count=0
+          volume_count=0
+          [ ! -f compose-services.txt ] || service_count="$(wc -l < compose-services.txt | tr -d ' ')"
+          [ ! -f compose-volumes.txt ] || volume_count="$(wc -l < compose-volumes.txt | tr -d ' ')"
+          {
+            echo '# 🐳 Docker Compose report'
+            echo
+            echo "> $(icon "$VALIDATE_OUTCOME") **Configuration:** $VALIDATE_OUTCOME &nbsp;·&nbsp; $(icon "$INVENTORY_OUTCOME") **Inventory:** $INVENTORY_OUTCOME"
+            echo
+            echo '| Metric | Result |'
+            echo '|---|---:|'
+            echo "| Services | **$service_count** |"
+            echo "| Named volumes | **$volume_count** |"
+            echo "| Compose CLI | **$(docker compose version --short 2>/dev/null || echo unavailable)** |"
+            if [ -s compose-services.txt ]; then
+              echo
+              echo '<details><summary>Validated services</summary>'
+              echo
+              sed 's/^/- `/' compose-services.txt | sed 's/$/`/'
+              echo
+              echo '</details>'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

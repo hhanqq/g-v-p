@@ -127,10 +127,6 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 		if outcome.CurrentNodeID == "" {
 			nextStatus = "done"
 		}
-		_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4,notified_count=notified_count+1 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt)
-		if err != nil {
-			return err
-		}
 		groupID := int64(number(outcome.Step.Data["group_id"]))
 		var usernames []string
 		if groupID != 0 {
@@ -140,12 +136,30 @@ func (planner *Planner) advanceScenario(ctx context.Context, scenarioID int64, s
 			}
 		} else if employeeID := int64(number(outcome.Step.Data["employee_id"])); employeeID != 0 {
 			var username string
-			if err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username); errors.Is(err, pgx.ErrNoRows) {
-				return nil
-			} else if err != nil {
+			if err := planner.pool.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 AND active=TRUE`, employeeID).Scan(&username); err == nil {
+				usernames = []string{username}
+			} else if !errors.Is(err, pgx.ErrNoRows) {
 				return err
 			}
-			usernames = []string{username}
+		}
+		if len(usernames) == 0 {
+			// Раньше состояние продвигалось (и notified_count рос) ещё до
+			// резолвинга получателя, так что отсутствие подписчика тонуло
+			// молча — прогон выглядел так, будто уведомил, хотя ни одной
+			// доставки не создавалось. Явную ветку графа для этого случая
+			// добавляет отдельный узел (см. следующий этап); здесь —
+			// минимум: не считать это отправкой и оставить видимый след.
+			_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt)
+			if err != nil {
+				return err
+			}
+			_, _ = planner.pool.Exec(ctx, `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES('scheduler','scenario_no_recipient',$1,$2,$3)`,
+				fmt.Sprintf("scenario:%d:problem:%d", scenarioID, problemID), fmt.Sprintf("node=%s", outcome.Step.ID), now)
+			return nil
+		}
+		_, err = planner.pool.Exec(ctx, `UPDATE scenario_runs SET status=$2,current_node_id=$3,step_entered_at=$4,notified_count=notified_count+1 WHERE id=$1`, runID, nextStatus, outcome.CurrentNodeID, outcome.EnteredAt)
+		if err != nil {
+			return err
 		}
 		for _, username := range usernames {
 			_, err = planner.createDelivery(ctx, delivery{

@@ -210,5 +210,57 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  redpanda:
+    # Kafka-wire-совместимая шина для потока change_events (история
+    # изменений объектов/сотрудников/групп/источников). Один узел,
+    # без ZooKeeper/JVM — тот же протокол и Go-клиент, что у "настоящего"
+    # Kafka, но не создаёт избыточной инфраструктурной нагрузки при
+    # реальном объёме кейса (~0.06 событий/с). НЕ встаёт между шлюзом и
+    # pipeline-worker'ом — тот остаётся на Postgres+FOR UPDATE SKIP
+    # LOCKED, самом измеренном и продемонстрированном пути платформы.
+    image: redpandadata/redpanda:v24.3.13
+    command:
+      - redpanda
+      - start
+      - --smp=1
+      - --memory=768M
+      - --overprovisioned
+      - --node-id=0
+      - --check=false
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+    ports: ["127.0.0.1:19092:19092"]
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+
+  clickhouse:
+    # Аналитическое хранилище change_events для low-code поиска
+    # (раздел «История изменений»). Postgres остаётся источником правды
+    # для операционного состояния и для истории на карточках объекта/
+    # сотрудника (быстрый прямой запрос, не зависящий от ClickHouse) —
+    # ClickHouse используется только для кросс-сущностного поиска.
+    image: clickhouse/clickhouse-server:24.8
+    environment:
+      CLICKHOUSE_USER: alert
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-alert}
+      CLICKHOUSE_DB: alerting
+    ports: ["127.0.0.1:8123:8123", "127.0.0.1:9010:9000"]
+    volumes:
+      - clickhousedata:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+
 volumes:
   pgdata:
+  redpandadata:
+  clickhousedata:

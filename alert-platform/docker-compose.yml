@@ -260,6 +260,43 @@ services:
       retries: 20
     mem_limit: 1g
 
+  clickhouse-migrate:
+    # Одноразовое применение database/clickhouse_migrations/*.sql — тот
+    # же паттерн, что migrate/kb-index (docker compose run --rm или
+    # автоматически на up, restart: "no"). ClickHouse — аналитический
+    # сток для low-code поиска, не операционный источник правды.
+    build:
+      context: .
+      dockerfile: go-platform/Dockerfile
+    entrypoint: ["/usr/local/bin/clickhouse-migrate"]
+    environment:
+      CLICKHOUSE_URL: clickhouse://alert:${CLICKHOUSE_PASSWORD:-alert}@clickhouse:9000/alerting
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    restart: "no"
+
+  changelog-worker:
+    # Postgres.change_events -> Redpanda -> ClickHouse. Строго побочный
+    # контур: никогда не встаёт между шлюзом и pipeline-worker'ом,
+    # отставание/недоступность не влияет на приём событий или доставку.
+    build:
+      context: .
+      dockerfile: go-platform/Dockerfile
+    entrypoint: ["/usr/local/bin/changelog-worker"]
+    environment:
+      DATABASE_URL: postgresql://alert:alert@postgres:5432/alert_platform
+      KAFKA_BROKERS: redpanda:9092
+      CLICKHOUSE_URL: clickhouse://alert:${CLICKHOUSE_PASSWORD:-alert}@clickhouse:9000/alerting
+      CHANGELOG_POLL_INTERVAL_S: "2"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      clickhouse-migrate:
+        condition: service_completed_successfully
+      redpanda:
+        condition: service_healthy
+
 volumes:
   pgdata:
   redpandadata:

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactFlow, { Background, Edge, MarkerType, Node } from "reactflow";
@@ -20,12 +20,37 @@ import { useTheme } from "../theme";
 export default function EquipmentDetail() {
   const { id } = useParams();
   const { theme } = useTheme();
+  const queryClient = useQueryClient();
   const [mode, setMode] = useState<"history" | "current">("history");
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ name: "", site: "", ip: "", fqdn: "", subnet: "", equipment_type: "", install_date: "" });
 
   const { data, isLoading } = useQuery<EquipmentDetailType>({
     queryKey: ["equipment", id],
     queryFn: () => api.get<EquipmentDetailType>(`/equipment/${encodeURIComponent(id ?? "")}`),
   });
+
+  function startEditing() {
+    if (!data) return;
+    setForm({
+      name: data.name, site: data.site, ip: data.ip ?? "", fqdn: data.fqdn ?? "",
+      subnet: data.subnet ?? "", equipment_type: data.equipment_type ?? "", install_date: data.install_date ?? "",
+    });
+    setEditing(true);
+  }
+
+  async function saveEquipment() {
+    setSaving(true);
+    try {
+      await api.put(`/equipment/${encodeURIComponent(id ?? "")}`, form);
+      await queryClient.invalidateQueries({ queryKey: ["equipment", id] });
+      await queryClient.invalidateQueries({ queryKey: ["equipment"] });
+      setEditing(false);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   const problems = useMemo(() => {
     if (!data) return [];
@@ -117,14 +142,56 @@ export default function EquipmentDetail() {
   return (
     <div>
       <Link to="/equipment" className="text-sm text-accent">← к списку оборудования</Link>
-      <PageHeader title={data.name} subtitle={`${data.equipment_type ?? data.kind} · ${data.site}`} />
-
-      <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Card><div className="text-xs text-muted">IP</div><div className="text-sm">{data.ip ?? "—"}</div></Card>
-        <Card><div className="text-xs text-muted">FQDN</div><div className="text-sm">{data.fqdn ?? "—"}</div></Card>
-        <Card><div className="text-xs text-muted">Подсеть</div><div className="text-sm">{data.subnet ?? "—"}</div></Card>
-        <Card><div className="text-xs text-muted">Введено в эксплуатацию</div><div className="text-sm">{data.install_date ?? "—"}</div></Card>
+      <div className="flex items-start justify-between">
+        <PageHeader title={data.name} subtitle={`${data.equipment_type ?? data.kind} · ${data.site}`} />
+        {!editing && (
+          <button
+            onClick={startEditing}
+            className="mt-1 shrink-0 rounded-md border border-border bg-card px-3 py-1.5 text-sm hover:bg-accent hover:text-white"
+          >
+            Редактировать
+          </button>
+        )}
       </div>
+
+      {editing ? (
+        <Card className="mb-4">
+          <h3 className="mb-3 text-sm font-semibold">Редактирование объекта</h3>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+              placeholder="Название" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.site} onChange={(e) => setForm({ ...form, site: e.target.value })}
+              placeholder="Площадка" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.ip} onChange={(e) => setForm({ ...form, ip: e.target.value })}
+              placeholder="IP" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.fqdn} onChange={(e) => setForm({ ...form, fqdn: e.target.value })}
+              placeholder="FQDN" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.subnet} onChange={(e) => setForm({ ...form, subnet: e.target.value })}
+              placeholder="Подсеть" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.equipment_type} onChange={(e) => setForm({ ...form, equipment_type: e.target.value })}
+              placeholder="Тип оборудования" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input type="date" value={form.install_date} onChange={(e) => setForm({ ...form, install_date: e.target.value })}
+              className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button onClick={saveEquipment} disabled={saving}
+              className="rounded-md bg-accent px-4 py-2 text-sm text-white disabled:opacity-50">
+              {saving ? "Сохранение…" : "Сохранить"}
+            </button>
+            <button onClick={() => setEditing(false)} disabled={saving}
+              className="rounded-md border border-border px-4 py-2 text-sm hover:bg-bg">
+              Отмена
+            </button>
+          </div>
+        </Card>
+      ) : (
+        <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <Card><div className="text-xs text-muted">IP</div><div className="text-sm">{data.ip ?? "—"}</div></Card>
+          <Card><div className="text-xs text-muted">FQDN</div><div className="text-sm">{data.fqdn ?? "—"}</div></Card>
+          <Card><div className="text-xs text-muted">Подсеть</div><div className="text-sm">{data.subnet ?? "—"}</div></Card>
+          <Card><div className="text-xs text-muted">Введено в эксплуатацию</div><div className="text-sm">{data.install_date ?? "—"}</div></Card>
+        </div>
+      )}
 
       <Card className="mb-4">
         <div className="text-xs text-muted">Ответственные группы</div>

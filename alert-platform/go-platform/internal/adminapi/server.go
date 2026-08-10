@@ -126,8 +126,16 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.listEmployees)
 		return
 	}
+	if request.Method == http.MethodPost && path == "/api/employees" {
+		server.withAuth(response, request, server.createEmployee)
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/employees/") {
 		server.withAuth(response, request, server.getEmployee)
+		return
+	}
+	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/employees/") {
+		server.withAuth(response, request, server.updateEmployee)
 		return
 	}
 	if request.Method == http.MethodPost && strings.HasSuffix(path, "/availability") && strings.HasPrefix(path, "/api/employees/") {
@@ -139,8 +147,16 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.listEquipment)
 		return
 	}
+	if request.Method == http.MethodPost && path == "/api/equipment" {
+		server.withAuth(response, request, server.createEquipment)
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/equipment/") {
 		server.withAuth(response, request, server.getEquipment)
+		return
+	}
+	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/equipment/") {
+		server.withAuth(response, request, server.updateEquipment)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/scenarios" {

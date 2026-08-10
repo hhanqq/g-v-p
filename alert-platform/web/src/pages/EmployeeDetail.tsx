@@ -26,6 +26,9 @@ export default function EmployeeDetail() {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const [saving, setSaving] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [form, setForm] = useState({ full_name: "", phone: "", email: "", position: "", active: true });
 
   const { data, isLoading } = useQuery<EmployeeDetailType>({
     queryKey: ["employee", id],
@@ -43,19 +46,80 @@ export default function EmployeeDetail() {
     }
   }
 
+  function startEditing() {
+    if (!data) return;
+    setForm({
+      full_name: data.full_name ?? "", phone: data.phone ?? "", email: data.email ?? "",
+      position: data.position ?? "", active: data.active,
+    });
+    setEditing(true);
+  }
+
+  async function saveEmployee() {
+    setEditSaving(true);
+    try {
+      await api.put(`/employees/${id}`, form);
+      await queryClient.invalidateQueries({ queryKey: ["employee", id] });
+      await queryClient.invalidateQueries({ queryKey: ["employees"] });
+      setEditing(false);
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
   if (isLoading || !data) return <div className="text-sm text-muted">Загрузка…</div>;
 
   return (
     <div>
       <Link to="/employees" className="text-sm text-accent">← к списку сотрудников</Link>
-      <PageHeader title={data.full_name ?? data.trueconf_username} subtitle={data.position ?? "должность не указана"} />
-
-      <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <Card><div className="text-xs text-muted">TrueConf</div><div className="text-sm">{data.trueconf_username}</div></Card>
-        <Card><div className="text-xs text-muted">Телефон</div><div className="text-sm">{data.phone ?? "—"}</div></Card>
-        <Card><div className="text-xs text-muted">E-mail</div><div className="text-sm">{data.email ?? "—"}</div></Card>
-        <Card><div className="text-xs text-muted">Подписок</div><div className="text-sm">{data.subscriptions.length}</div></Card>
+      <div className="flex items-start justify-between">
+        <PageHeader title={data.full_name ?? data.trueconf_username} subtitle={data.position ?? "должность не указана"} />
+        {!editing && (
+          <button
+            onClick={startEditing}
+            className="mt-1 shrink-0 rounded-md border border-border bg-card px-3 py-1.5 text-sm hover:bg-accent hover:text-white"
+          >
+            Редактировать
+          </button>
+        )}
       </div>
+
+      {editing ? (
+        <Card className="mb-4">
+          <h3 className="mb-3 text-sm font-semibold">Редактирование сотрудника</h3>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input value={form.full_name} onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+              placeholder="ФИО" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })}
+              placeholder="Должность" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              placeholder="Телефон" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
+              placeholder="E-mail" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+          </div>
+          <label className="mt-3 flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
+            Активен (действующий сотрудник)
+          </label>
+          <div className="mt-3 flex gap-2">
+            <button onClick={saveEmployee} disabled={editSaving}
+              className="rounded-md bg-accent px-4 py-2 text-sm text-white disabled:opacity-50">
+              {editSaving ? "Сохранение…" : "Сохранить"}
+            </button>
+            <button onClick={() => setEditing(false)} disabled={editSaving}
+              className="rounded-md border border-border px-4 py-2 text-sm hover:bg-bg">
+              Отмена
+            </button>
+          </div>
+        </Card>
+      ) : (
+        <div className="mb-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <Card><div className="text-xs text-muted">TrueConf</div><div className="text-sm">{data.trueconf_username}</div></Card>
+          <Card><div className="text-xs text-muted">Телефон</div><div className="text-sm">{data.phone ?? "—"}</div></Card>
+          <Card><div className="text-xs text-muted">E-mail</div><div className="text-sm">{data.email ?? "—"}</div></Card>
+          <Card><div className="text-xs text-muted">Подписок</div><div className="text-sm">{data.subscriptions.length}</div></Card>
+        </div>
+      )}
 
       <Card className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">Доступность</h3>

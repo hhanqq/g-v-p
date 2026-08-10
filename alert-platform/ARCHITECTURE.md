@@ -35,9 +35,29 @@ graph LR
     USR -->|"/кабинет — подписки"| ADM
     USR -->|"команды боту"| TC
 
+    subgraph hist["История изменений — строго побочный контур"]
+        CW["changelog-worker (Go)\nrelay + sink + datalake tailer"]
+        RP[("Redpanda\nchange_events.v1")]
+        CH[("ClickHouse\nlow-code поиск")]
+        MI[("MinIO\nсырой архив Signal")]
+        CW --> RP
+        RP --> CW
+        CW --> CH
+        CW -.-> MI
+    end
+    PG -.->|"change_events, только чтение outside gateway"| CW
+    PG -.->|"signals, вотермарк-tailer"| CW
+    ADM -.->|"POST /change-history/search"| CH
+
     style OLLAMA fill:#f0f6ff,stroke:#06c
     style PG fill:#fff3e0,stroke:#e67e00
+    style hist fill:#f5f5f5,stroke:#999,stroke-dasharray: 5 5
 ```
+
+Пунктирные связи от `hist` — намеренно: этот контур строго downstream,
+`gateway/http.go` и `pipeline/service.go` не импортируют пакет
+`internal/changelog` и не знают о существовании Redpanda/ClickHouse/
+MinIO. Раздел 7 ниже.
 
 **Роли компонентов:**
 
@@ -52,6 +72,10 @@ graph LR
 | Admin Console | Go API + React SPA | Go раздаёт SPA, выполняет LDAP session auth, обслуживает admin API и token-based личный кабинет; старые HTML URL перенаправляются на SPA |
 | Demo Runner | Python/FastAPI, internal-only | Только синтетический datagen и живые Ollama self-tests; не обслуживает HTML/авторизацию и не участвует в production-тракте |
 | TrueConf Server | TrueConf | Обязательный корпоративный канал доставки (кейс, п.2 условий) |
+| changelog-worker | Go 1.25, `franz-go`, `clickhouse-go/v2`, `minio-go/v7` | Строго побочный контур (раздел 7): переносит `change_events` в Kafka и ClickHouse, опционально архивирует `signals` в MinIO |
+| Redpanda | Kafka-совместимая шина, self-hosted | Транспорт для потока изменений (`change_events.v1`); никогда не участвует в основном тракте приёма/доставки |
+| ClickHouse | Открытый код, self-hosted (изначально Яндекс) | Аналитическое хранилище для low-code поиска по истории изменений |
+| MinIO | S3-совместимое хранилище, open-source | Опциональный сырой архив `Signal` для долгосрочного хранения/ML/RAG |
 
 ## 2. Поток данных (9 стадий конвейера)
 
@@ -84,6 +108,8 @@ flowchart LR
 | ИИ-модуль | **Ollama + открытые веса** (модель `log-reader` на базе `qwen3-coder`) | Полностью self-hosted, без обращения к внешним облачным API — соответствует политике ИБ кейса («запрет передачи данных во внешние облака», раздел «Дополнительные вводные данные») |
 | Backend | **Go для ingress, pipeline, planner и admin console; Python для vendor/demo adapters** | Go владеет критическим трактом, LDAP session, личным кабинетом и admin API. Python изолирует TrueConf SDK, LDAP deprovision sweep и необязательный синтетический datagen |
 | Контейнеризация | **Docker Compose** | Инструмент сборки/запуска, не часть решаемой бизнес-задачи — при необходимости заменяется на Podman/аналог без изменения кода приложения |
+| Аналитика истории изменений | **ClickHouse** | Открытый код, изначально разработан Яндексом — предметно ближе к «отечественному продукту», чем большинство альтернатив в этом классе |
+| Шина для истории изменений | **Redpanda** (Kafka-совместимая) | Один процесс без ZooKeeper/JVM — тот же протокол, что у классического Kafka, но меньше инфраструктурной нагрузки на пилотный стенд |
 
 Иностранных облачных сервисов (SaaS LLM, зарубежные мессенджеры, внешние
 API мониторинга) в решении нет — все компоненты либо отечественные, либо
@@ -135,3 +161,31 @@ Go pipeline/planner используют один локальный Ollama endp
 - **Каналы доставки**: TrueConf обязателен; Python adapter изолирован контрактом `DeliveryCommand v1` и `delivery_outbox` — второй канал добавляется отдельным producer/consumer этого интерфейса без изменения парсера/корреляции/приоритизации.
 - **Обработка**: `pipeline-worker` — множественные реплики безопасно конкурируют за очередь (`FOR UPDATE SKIP LOCKED`), проверено логикой двухфазного claim/process.
 - **Нагрузка**: измеренные вживую показатели — раздел «Инфраструктура и масштабируемость» (`INFRASTRUCTURE.md`).
+
+## 7. История изменений — строго побочный контур (Redpanda/ClickHouse/MinIO)
+
+Раздел «История изменений» (карточки объекта/сотрудника + low-code
+поиск) добавляет три новых сервиса, но **намеренно не расширяет
+критический путь**. Ключевое архитектурное решение: `change_events`
+пишется в той же транзакции, что и сама мутация (Postgres,
+`internal/changelog.Record`), а `changelog-worker` — отдельный процесс,
+который читает эту таблицу СНАРУЖИ (тот же принцип, что у outbox-
+доставки). `gateway/http.go` и `pipeline/service.go` не импортируют
+пакет `internal/changelog` и не содержат ни единого упоминания
+Kafka/ClickHouse/MinIO.
+
+Проверено вживую: `docker stop` на MinIO во время активной архивации —
+`POST /api/v1/ingest/raw` продолжает отвечать `202` без единой заминки;
+`changelog-worker` не падает, логирует ошибку и повторяет; после
+`docker start` тайлер сам восстановился без потери и без дублей
+(водяной знак коммитится в одной транзакции с чтением диапазона,
+`data_lake_watermark`). Подробности и измеренный footprint — разделы
+6-7 `INFRASTRUCTURE.md`.
+
+**Честно про масштаб этого решения**: реальный объём кейса (тысячи
+событий в сутки) сам по себе не требует Kafka/ClickHouse — Postgres
+здесь справился бы. Три новых сервиса оправданы не текущей нагрузкой,
+а конкретным продуктовым требованием (структурированная история +
+low-code поиск, которых в Postgres без отдельного слоя не построить
+так же быстро) и тем, что контур одноразово изолирован от критического
+пути — не растёт вместе с риском основной доставки.

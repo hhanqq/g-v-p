@@ -247,6 +247,34 @@ export interface ScenarioDetail extends ScenarioListItem {
   created_by: string | null;
 }
 
+export interface ScenarioStatsResponse {
+  scenario_id: number;
+  version: number;
+  counters: { node_id: string; node_type: string; branch: string; count: number }[];
+}
+
+export interface ScenarioRunItem {
+  run_id: number;
+  problem_id: number;
+  current_node_id: string;
+  status: string;
+  step_entered_at: string;
+  notified_count: number;
+  version: number;
+  symptom_class: string;
+  object_id: string | null;
+  priority: string | null;
+  problem_status: string;
+}
+
+export interface ScenarioRunTrace {
+  run_id: number;
+  problem_id: number;
+  version: number;
+  graph_json: string;
+  steps: { node_id: string; node_type: string; branch: string; recipients_json: string | null; entered_at: string }[];
+}
+
 export interface SlaRuleItem {
   id: number;
   name: string;

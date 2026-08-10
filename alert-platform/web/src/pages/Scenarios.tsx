@@ -20,12 +20,15 @@ export default function Scenarios() {
       <div className="space-y-2">
         {data?.length ? (
           data.map((s) => (
-            <Link key={s.id} to={`/scenarios/${s.id}/edit`}>
-              <Card className="flex items-center justify-between hover:border-accent">
-                <div>
-                  <div className="text-sm">{s.name}</div>
-                  {s.description && <div className="text-xs text-muted">{s.description}</div>}
-                </div>
+            <Card key={s.id} className="flex items-center justify-between hover:border-accent">
+              <Link to={`/scenarios/${s.id}/edit`} className="flex-1">
+                <div className="text-sm">{s.name}</div>
+                {s.description && <div className="text-xs text-muted">{s.description}</div>}
+              </Link>
+              <div className="flex items-center gap-2">
+                <Link to={`/scenarios/${s.id}/stats`} className="text-xs text-accent hover:underline">
+                  аналитика
+                </Link>
                 <span
                   className={`rounded px-2 py-0.5 text-xs ${
                     s.status === "active" ? "bg-emerald-500/15 text-emerald-400" : "bg-fg/10 text-muted"
@@ -33,8 +36,8 @@ export default function Scenarios() {
                 >
                   {s.status === "active" ? "активен" : "черновик"}
                 </span>
-              </Card>
-            </Link>
+              </div>
+            </Card>
           ))
         ) : (
           <p className="text-sm text-muted">Сохранённых сценариев пока нет — создайте первый.</p>

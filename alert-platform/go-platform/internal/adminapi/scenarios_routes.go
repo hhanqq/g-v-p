@@ -70,5 +70,28 @@ func (server *Server) routeScenarios(response http.ResponseWriter, request *http
 		})
 		return true
 	}
+	if len(segments) == 2 && segments[1] == "stats" && request.Method == http.MethodGet {
+		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
+			server.scenarioStats(w, r, scenarioID)
+		})
+		return true
+	}
+	if len(segments) == 2 && segments[1] == "runs" && request.Method == http.MethodGet {
+		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
+			server.scenarioRuns(w, r, scenarioID)
+		})
+		return true
+	}
+	if len(segments) == 4 && segments[1] == "runs" && segments[3] == "trace" && request.Method == http.MethodGet {
+		runID, err := strconv.ParseInt(segments[2], 10, 64)
+		if err != nil {
+			writeError(response, http.StatusUnprocessableEntity, "invalid run id")
+			return true
+		}
+		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
+			server.scenarioRunTrace(w, r, scenarioID, runID)
+		})
+		return true
+	}
 	return false
 }

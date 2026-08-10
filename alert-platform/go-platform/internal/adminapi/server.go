@@ -240,6 +240,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.integrationsStatus)
 		return
 	}
+	if request.Method == http.MethodGet && path == "/api/integrations/delivery-analytics" {
+		server.withAuth(response, request, server.deliveryAnalytics)
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/sources" {
 		server.withAuth(response, request, server.listSources)
 		return
@@ -643,13 +647,21 @@ func (server *Server) getEmployee(response http.ResponseWriter, request *http.Re
 		return
 	}
 	var username string
-	var fullName, phone, email, position sql.NullString
-	var active bool
-	err := server.pool.QueryRow(request.Context(), `SELECT trueconf_username,full_name,phone,email,position,active FROM subscribers WHERE id=$1`, id).Scan(&username, &fullName, &phone, &email, &position, &active)
+	var fullName, phone, email, position, competencies sql.NullString
+	var active, trueconfEnabled, emailEnabled bool
+	err := server.pool.QueryRow(request.Context(), `
+		SELECT trueconf_username,full_name,phone,email,position,active,trueconf_enabled,email_enabled,competencies
+		FROM subscribers WHERE id=$1`, id,
+	).Scan(&username, &fullName, &phone, &email, &position, &active, &trueconfEnabled, &emailEnabled, &competencies)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(response, http.StatusNotFound, "Сотрудник не найден")
 		return
 	}
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	responsibility, err := server.employeeResponsibilityZones(request.Context(), id)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
@@ -673,8 +685,40 @@ func (server *Server) getEmployee(response http.ResponseWriter, request *http.Re
 		"id": id, "trueconf_username": username, "full_name": nullableString(fullName),
 		"phone": nullableString(phone), "email": nullableString(email), "position": nullableString(position),
 		"active": active, "subscriptions": subscriptions, "availability_history": availability,
-		"recent_alerts": recentAlerts,
+		"recent_alerts": recentAlerts, "trueconf_enabled": trueconfEnabled, "email_enabled": emailEnabled,
+		"competencies": nullableString(competencies), "responsibility_zones": responsibility,
 	})
+}
+
+// employeeResponsibilityZones — «Ответственность» на карточке сотрудника
+// (раздел VIII.34 ТЗ): реальные group_equipment_scope групп, в которых
+// состоит сотрудник, а не свободный текст — то же самое, что уже
+// использует equipmentResponsibleGroups, только в обратную сторону.
+func (server *Server) employeeResponsibilityZones(ctx context.Context, subscriberID int64) ([]map[string]any, error) {
+	rows, err := server.pool.Query(ctx, `
+		SELECT DISTINCT g.name, scope.site, scope.equipment_type, scope.object_id
+		FROM group_members member
+		JOIN groups g ON g.id = member.group_id
+		LEFT JOIN group_equipment_scope scope ON scope.group_id = g.id
+		WHERE member.subscriber_id = $1
+		ORDER BY g.name`, subscriberID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var groupName string
+		var site, equipmentType, objectID sql.NullString
+		if err := rows.Scan(&groupName, &site, &equipmentType, &objectID); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]any{
+			"group": groupName, "site": nullableString(site),
+			"equipment_type": nullableString(equipmentType), "object_id": nullableString(objectID),
+		})
+	}
+	return items, rows.Err()
 }
 
 // loadRecentAlerts возвращает уведомления, реально доставленные этому
@@ -1266,14 +1310,61 @@ func (server *Server) listSLARules(response http.ResponseWriter, request *http.R
 	writeJSON(response, http.StatusOK, items)
 }
 
+// integrationsStatus — намеренно НЕ обращается к БД (проверено
+// TestIntegrationsRequiresGoSession с server.pool=nil — эта ручка
+// тестирует только auth/session-плумбинг). Живые числа по Email —
+// GET /api/integrations/delivery-analytics ниже.
 func (server *Server) integrationsStatus(response http.ResponseWriter, _ *http.Request, _ map[string]any) {
 	writeJSON(response, http.StatusOK, []map[string]string{
 		{"name": "TrueConf", "status": "active", "detail": "Основной канал доставки, раздел 9"},
 		{"name": "Системы мониторинга (Zabbix/SolarWinds)", "status": "active", "detail": "Подключение источников — /sources/, без редеплоя"},
 		{"name": "SMS", "status": "planned", "detail": "Опционально по кейсу — не реализовано в Этапе 1"},
-		{"name": "E-mail", "status": "planned", "detail": "Опционально по кейсу — не реализовано в Этапе 1"},
+		{"name": "E-mail", "status": "active", "detail": "Второй канал доставки через delivery-email (SMTP), раздел VII — реальные письма, не декоративная интеграция. Включается на карточке сотрудника, живые цифры — ниже"},
 		{"name": "HR-система (доступность сотрудников)", "status": "open_question", "detail": "Источник данных не определён — требует уточнения у менторов"},
 	})
+}
+
+// deliveryAnalytics — GET /api/integrations/delivery-analytics: доля
+// доставленного/ошибок по каждому реальному каналу delivery_outbox, не
+// только TrueConf (раздел VII.31 ТЗ). "sent" здесь означает, что канал
+// принял сообщение (SMTP accepted / TrueConf API отправил) — не то же
+// самое, что "получатель прочитал"; отдельно честно оговорено, что без
+// корпоративного read-receipt механизма прочтение неизвестно.
+func (server *Server) deliveryAnalytics(response http.ResponseWriter, request *http.Request, _ map[string]any) {
+	rows, err := server.pool.Query(request.Context(), `
+		SELECT channel,
+			count(*) AS total,
+			count(*) FILTER (WHERE status='sent') AS sent,
+			count(*) FILTER (WHERE status='failed') AS failed
+		FROM delivery_outbox GROUP BY channel ORDER BY channel`)
+	if err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	defer rows.Close()
+	items := make([]map[string]any, 0)
+	for rows.Next() {
+		var channel string
+		var total, sent, failed int
+		if err := rows.Scan(&channel, &total, &sent, &failed); err != nil {
+			writeError(response, http.StatusInternalServerError, "scan delivery analytics")
+			return
+		}
+		var sentPct, failedPct *float64
+		if total > 0 {
+			s, f := float64(sent)/float64(total)*100, float64(failed)/float64(total)*100
+			sentPct, failedPct = &s, &f
+		}
+		items = append(items, map[string]any{
+			"channel": channel, "total": total, "sent": sent, "failed": failed,
+			"sent_pct": sentPct, "failed_pct": failedPct,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		writeError(response, http.StatusInternalServerError, "load delivery analytics")
+		return
+	}
+	writeJSON(response, http.StatusOK, items)
 }
 
 func writeJSON(response http.ResponseWriter, status int, value any) {

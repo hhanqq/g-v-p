@@ -28,7 +28,10 @@ export default function EmployeeDetail() {
   const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
-  const [form, setForm] = useState({ full_name: "", phone: "", email: "", position: "", active: true });
+  const [form, setForm] = useState({
+    full_name: "", phone: "", email: "", position: "", active: true,
+    competencies: "", trueconf_enabled: true, email_enabled: false,
+  });
 
   const { data, isLoading } = useQuery<EmployeeDetailType>({
     queryKey: ["employee", id],
@@ -62,6 +65,7 @@ export default function EmployeeDetail() {
     setForm({
       full_name: data.full_name ?? "", phone: data.phone ?? "", email: data.email ?? "",
       position: data.position ?? "", active: data.active,
+      competencies: data.competencies ?? "", trueconf_enabled: data.trueconf_enabled, email_enabled: data.email_enabled,
     });
     setEditing(true);
   }
@@ -107,11 +111,29 @@ export default function EmployeeDetail() {
               placeholder="Телефон" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
             <input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })}
               placeholder="E-mail" className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm" />
+            <input value={form.competencies} onChange={(e) => setForm({ ...form, competencies: e.target.value })}
+              placeholder="Компетенции (PLC, SCADA, АСУ ТП…)"
+              className="w-full rounded-md border border-border bg-bg px-3 py-2 text-sm sm:col-span-2" />
           </div>
           <label className="mt-3 flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.active} onChange={(e) => setForm({ ...form, active: e.target.checked })} />
             Активен (действующий сотрудник)
           </label>
+          <div className="mt-3">
+            <div className="mb-1 text-xs font-medium text-muted">Каналы уведомлений</div>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={form.trueconf_enabled}
+                onChange={(e) => setForm({ ...form, trueconf_enabled: e.target.checked })} />
+              TrueConf
+            </label>
+            <label className="mt-1 flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={form.email_enabled}
+                onChange={(e) => setForm({ ...form, email_enabled: e.target.checked })} />
+              Email {!form.email && form.email_enabled && (
+                <span className="text-xs text-amber-400">(укажите e-mail выше, иначе письма не уйдут)</span>
+              )}
+            </label>
+          </div>
           <div className="mt-3 flex gap-2">
             <button onClick={saveEmployee} disabled={editSaving}
               className="rounded-md bg-accent px-4 py-2 text-sm text-white disabled:opacity-50">
@@ -131,6 +153,37 @@ export default function EmployeeDetail() {
           <Card><div className="text-xs text-muted">Подписок</div><div className="text-sm">{data.subscriptions.length}</div></Card>
         </div>
       )}
+
+      <Card className="mb-4">
+        <h3 className="mb-3 text-sm font-semibold">Каналы и зона ответственности</h3>
+        <div className="mb-3 flex gap-2">
+          <span className={`rounded px-2 py-0.5 text-xs font-medium ${data.trueconf_enabled ? "bg-emerald-500/15 text-emerald-400" : "bg-fg/10 text-muted"}`}>
+            TrueConf {data.trueconf_enabled ? "включён" : "выключен"}
+          </span>
+          <span className={`rounded px-2 py-0.5 text-xs font-medium ${data.email_enabled ? "bg-emerald-500/15 text-emerald-400" : "bg-fg/10 text-muted"}`}>
+            Email {data.email_enabled ? "включён" : "выключен"}
+          </span>
+        </div>
+        {data.competencies && (
+          <div className="mb-3 text-sm">
+            <span className="text-xs text-muted">Компетенции: </span>{data.competencies}
+          </div>
+        )}
+        {data.responsibility_zones.length === 0 ? (
+          <p className="text-sm text-muted">Не состоит ни в одной группе с зоной ответственности.</p>
+        ) : (
+          <ul className="space-y-1 text-sm text-muted">
+            {data.responsibility_zones.map((z, i) => (
+              <li key={i}>
+                {z.group}
+                {(z.site || z.equipment_type || z.object_id) && (
+                  <span> — {[z.site, z.equipment_type, z.object_id].filter(Boolean).join(" / ")}</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       <Card className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">Доступность</h3>

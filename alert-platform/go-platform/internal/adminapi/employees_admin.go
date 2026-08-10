@@ -97,11 +97,14 @@ func (server *Server) createEmployee(response http.ResponseWriter, request *http
 }
 
 type employeeUpdateRequest struct {
-	FullName *string `json:"full_name"`
-	Phone    *string `json:"phone"`
-	Email    *string `json:"email"`
-	Position *string `json:"position"`
-	Active   *bool   `json:"active"`
+	FullName        *string `json:"full_name"`
+	Phone           *string `json:"phone"`
+	Email           *string `json:"email"`
+	Position        *string `json:"position"`
+	Active          *bool   `json:"active"`
+	Competencies    *string `json:"competencies"`
+	TrueconfEnabled *bool   `json:"trueconf_enabled"`
+	EmailEnabled    *bool   `json:"email_enabled"`
 }
 
 // updateEmployee — та же конвенция NULLIF-по-пустой-строке, что у
@@ -133,9 +136,10 @@ func (server *Server) updateEmployee(response http.ResponseWriter, request *http
 	defer func() { _ = tx.Rollback(request.Context()) }()
 
 	var beforeFullName, beforePhone, beforeEmail, beforePosition sql.NullString
-	var beforeActive bool
-	err = tx.QueryRow(request.Context(), `SELECT full_name,phone,email,position,active FROM subscribers WHERE id=$1 FOR UPDATE`, id).
-		Scan(&beforeFullName, &beforePhone, &beforeEmail, &beforePosition, &beforeActive)
+	var beforeActive, beforeTrueconfEnabled, beforeEmailEnabled bool
+	err = tx.QueryRow(request.Context(),
+		`SELECT full_name,phone,email,position,active,trueconf_enabled,email_enabled FROM subscribers WHERE id=$1 FOR UPDATE`, id).
+		Scan(&beforeFullName, &beforePhone, &beforeEmail, &beforePosition, &beforeActive, &beforeTrueconfEnabled, &beforeEmailEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(response, http.StatusNotFound, "Сотрудник не найден")
 		return
@@ -148,18 +152,27 @@ func (server *Server) updateEmployee(response http.ResponseWriter, request *http
 	if payload.Active != nil {
 		active = *payload.Active
 	}
+	trueconfEnabled := beforeTrueconfEnabled
+	if payload.TrueconfEnabled != nil {
+		trueconfEnabled = *payload.TrueconfEnabled
+	}
+	emailEnabled := beforeEmailEnabled
+	if payload.EmailEnabled != nil {
+		emailEnabled = *payload.EmailEnabled
+	}
 
 	var fullName, phone, email, position sql.NullString
-	var resultActive bool
+	var resultActive, resultTrueconfEnabled, resultEmailEnabled bool
 	err = tx.QueryRow(request.Context(), `
 		UPDATE subscribers SET
 			full_name=COALESCE(NULLIF($2,''),full_name), phone=COALESCE(NULLIF($3,''),phone),
-			email=COALESCE(NULLIF($4,''),email), position=COALESCE(NULLIF($5,''),position), active=$6
+			email=COALESCE(NULLIF($4,''),email), position=COALESCE(NULLIF($5,''),position), active=$6,
+			competencies=COALESCE(NULLIF($7,''),competencies), trueconf_enabled=$8, email_enabled=$9
 		WHERE id=$1
-		RETURNING full_name,phone,email,position,active`,
+		RETURNING full_name,phone,email,position,active,trueconf_enabled,email_enabled`,
 		id, valueOrEmpty(payload.FullName), valueOrEmpty(payload.Phone), valueOrEmpty(payload.Email),
-		valueOrEmpty(payload.Position), active,
-	).Scan(&fullName, &phone, &email, &position, &resultActive)
+		valueOrEmpty(payload.Position), active, valueOrEmpty(payload.Competencies), trueconfEnabled, emailEnabled,
+	).Scan(&fullName, &phone, &email, &position, &resultActive, &resultTrueconfEnabled, &resultEmailEnabled)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return

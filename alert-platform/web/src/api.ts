@@ -299,6 +299,10 @@ export interface EmployeeDetail extends EmployeeListItem {
     note: string | null;
   }[];
   recent_alerts: EmployeeRecentAlert[];
+  trueconf_enabled: boolean;
+  email_enabled: boolean;
+  competencies: string | null;
+  responsibility_zones: { group: string; site: string | null; equipment_type: string | null; object_id: string | null }[];
 }
 
 export interface ScenarioListItem {
@@ -411,6 +415,15 @@ export interface IntegrationStatus {
   name: string;
   status: "active" | "planned" | "open_question";
   detail: string;
+}
+
+export interface DeliveryChannelAnalytics {
+  channel: string;
+  total: number;
+  sent: number;
+  failed: number;
+  sent_pct: number | null;
+  failed_pct: number | null;
 }
 
 export interface SourceItem {

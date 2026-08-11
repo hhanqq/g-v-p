@@ -84,6 +84,33 @@ export interface PlatformUserDetail {
   effective_permissions: string[];
 }
 
+export interface ComponentStatus {
+  name: string;
+  status: "normal" | "degraded" | "unknown";
+  detail?: string;
+}
+
+export interface PlatformHealth {
+  components: ComponentStatus[];
+  resources: {
+    cpu_pct?: number;
+    cpu_series: number[];
+    ram_pct?: number;
+    ram_used_gb?: number;
+    ram_total_gb?: number;
+    ram_series: number[];
+    disk_pct?: number;
+    disk_used_gb?: number;
+    disk_total_gb?: number;
+  };
+  ai: {
+    ollama_available: boolean;
+    gpu: "unavailable" | { vram_used_gb: number; vram_total_gb: number };
+    requests_per_min_last_hour?: number;
+    inference_p95_seconds?: number | null;
+  };
+}
+
 export interface RBACMeta {
   roles: { value: string; label: string }[];
   permissions: { value: string; label: string }[];

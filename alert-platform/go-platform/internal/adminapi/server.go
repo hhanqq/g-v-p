@@ -27,12 +27,15 @@ import (
 )
 
 type Server struct {
-	pool       *pgxpool.Pool
-	demo       *httputil.ReverseProxy
-	staticDir  string
-	sessions   *SessionManager
-	clickhouse clickhouse.Conn
-	ollama     *planner.OllamaClient
+	pool             *pgxpool.Pool
+	demo             *httputil.ReverseProxy
+	staticDir        string
+	sessions         *SessionManager
+	clickhouse       clickhouse.Conn
+	ollama           *planner.OllamaClient
+	resources        *resourceSampler
+	gpuTotalVRAMMB   int
+	gatewayHealthURL string
 }
 
 func (server *Server) UseSessions(sessions *SessionManager) { server.sessions = sessions }
@@ -52,6 +55,20 @@ func (server *Server) UseClickHouse(conn clickhouse.Conn) { server.clickhouse = 
 // И5, тот же контракт деградации, что у всех остальных ИИ-сценариев.
 func (server *Server) UseOllama(client *planner.OllamaClient) { server.ollama = client }
 
+// UseGPUCapacity — общая физическая емкость VRAM конкретной карты
+// (мегабайты), задаётся один раз оператором из `nvidia-smi
+// --query-gpu=memory.total`: Ollama API её не отдаёт, а сам admin-api
+// не имеет доступа к nvidia-smi без GPU passthrough в контейнер (раздел
+// 26 доп. ТЗ). 0 — «неизвестно», используемая VRAM (реальная, из Ollama
+// /api/ps) в этом случае показывается без total, не с выдуманным
+// значением по умолчанию.
+func (server *Server) UseGPUCapacity(totalMB int) { server.gpuTotalVRAMMB = totalMB }
+
+// UseGatewayHealthURL — переопределяет адрес самодиагностики Gateway
+// (по умолчанию — внутреннее docker-имя сервиса); нужно для тестов и
+// для нестандартных docker-compose топологий.
+func (server *Server) UseGatewayHealthURL(url string) { server.gatewayHealthURL = url }
+
 func New(pool *pgxpool.Pool, demoURL, staticDir string) (*Server, error) {
 	target, err := url.Parse(demoURL)
 	if err != nil {
@@ -61,9 +78,12 @@ func New(pool *pgxpool.Pool, demoURL, staticDir string) (*Server, error) {
 	proxy.ErrorHandler = func(response http.ResponseWriter, _ *http.Request, proxyErr error) {
 		writeError(response, http.StatusBadGateway, "demo runner unavailable: "+proxyErr.Error())
 	}
-	return &Server{
+	server := &Server{
 		pool: pool, demo: proxy, staticDir: staticDir,
-	}, nil
+		resources: newResourceSampler(), gatewayHealthURL: "http://gateway:8080/api/v1/health",
+	}
+	server.resources.start(context.Background())
+	return server, nil
 }
 
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -170,6 +190,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	}
 	if request.Method == http.MethodGet && path == "/api/metrics" {
 		server.withPermission(response, request, rbac.DashboardRead, server.homeSummary)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/platform-health" {
+		server.withPermission(response, request, rbac.PlatformHealthRead, server.platformHealth)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/incidents" {

@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3, CheckCircle2, ClipboardList, HelpCircle, History, Home,
   PanelLeftClose, PanelLeftOpen, Plug, Server, ShieldCheck, Siren,
-  Timer, Users, UsersRound, Workflow, CalendarDays, UserCog,
+  Timer, Users, UsersRound, Workflow, CalendarDays, UserCog, Activity,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -69,6 +69,7 @@ const GROUPS: NavGroup[] = [
       { label: "Источники", to: "/sources", icon: Server, permission: "sources.read" },
       { label: "Пользователи и права", to: "/users", icon: UserCog, permission: "users.read" },
       { label: "Аудит", to: "/audit", icon: History, permission: "audit.read" },
+      { label: "Состояние системы", to: "/platform-health", icon: Activity, permission: "platform_health.read" },
     ],
   },
   { title: null, items: [{ label: "Справка", to: "/help", icon: HelpCircle, permission: "help.read" }] },

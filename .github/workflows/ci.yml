@@ -375,6 +375,9 @@ jobs:
     name: 🐳 Compose · config validation
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    env:
+      LDAP_SEARCH_PASSWORD: ci-compose-validation-only
+      SESSION_SECRET: ci-compose-validation-only
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

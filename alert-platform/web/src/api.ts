@@ -12,6 +12,16 @@ export class ApiError extends Error {
   }
 }
 
+// isGuestSession — обновляется из useCurrentUser() при каждом успешном
+// /auth/me. Раздел 19 доп. ТЗ: гость должен видеть именно «Недоступно в
+// гостевом режиме», а не сырое «недостаточно прав: sla.manage» — backend
+// уже честно возвращает 403 в обоих случаях (реальное ограничение прав),
+// здесь только косметика сообщения для конкретно гостевой сессии.
+let isGuestSession = false;
+export function setGuestSessionFlag(guest: boolean) {
+  isGuestSession = guest;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
@@ -19,6 +29,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
+    if (res.status === 403 && isGuestSession) {
+      throw new ApiError(res.status, "Недоступно в гостевом режиме");
+    }
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, body.detail ?? res.statusText);
   }
@@ -38,6 +51,44 @@ export const api = {
 export interface CurrentUser {
   username: string;
   is_admin: boolean;
+  guest: boolean;
+  role: string;
+  role_label: string;
+  permissions: string[];
+  scopes: { type: string; value: string }[];
+  platform_user_id: number;
+}
+
+export function hasPermission(user: CurrentUser | undefined, permission: string): boolean {
+  return !!user?.permissions?.includes(permission);
+}
+
+export interface PlatformUserListItem {
+  id: number;
+  username: string;
+  role: string;
+  role_label: string;
+  active: boolean;
+  override_count: number;
+  scope_count: number;
+}
+
+export interface PlatformUserDetail {
+  id: number;
+  username: string;
+  role: string;
+  role_label: string;
+  active: boolean;
+  overrides: { permission: string; effect: "grant" | "deny" }[];
+  scopes: { type: string; value: string }[];
+  effective_permissions: string[];
+}
+
+export interface RBACMeta {
+  roles: { value: string; label: string }[];
+  permissions: { value: string; label: string }[];
+  role_permissions: Record<string, string[]>;
+  scope_types: { value: string; label: string }[];
 }
 
 export interface HomeSummary {

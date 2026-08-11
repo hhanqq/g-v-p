@@ -27,6 +27,7 @@ import Audit from "./pages/Audit";
 import ChangeHistory from "./pages/ChangeHistory";
 import Demo from "./pages/Demo";
 import Help from "./pages/Help";
+import Users from "./pages/Users";
 
 export default function App() {
   const location = useLocation();
@@ -62,6 +63,11 @@ export default function App() {
           <span className="text-sm font-semibold">ADP</span>
           <span className="w-7" />
         </div>
+        {user.guest && (
+          <div className="border-b border-amber-500/30 bg-amber-500/10 px-4 py-1.5 text-center text-xs font-medium text-amber-500">
+            Гостевой режим · просмотр данных
+          </div>
+        )}
         <main className="flex-1 overflow-y-auto p-4 md:p-8">
         <Routes>
           <Route path="/" element={<Home />} />
@@ -87,6 +93,7 @@ export default function App() {
           <Route path="/change-history" element={<ChangeHistory />} />
           <Route path="/demo" element={<Demo />} />
           <Route path="/help" element={<Help />} />
+          <Route path="/users" element={<Users />} />
         </Routes>
         </main>
       </div>

@@ -15,6 +15,7 @@ import (
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/availability"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/coverage"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/rbac"
 )
 
 // routeEmployeeAvailability обрабатывает /api/employees/{id}/availability
@@ -39,11 +40,11 @@ func (server *Server) routeEmployeeAvailability(response http.ResponseWriter, re
 		return true
 	}
 	if len(segments) == 2 && request.Method == http.MethodPost {
-		server.withAuth(response, request, server.setEmployeeAvailability)
+		server.withPermission(response, request, rbac.AvailabilityManage, server.setEmployeeAvailability)
 		return true
 	}
 	if len(segments) == 3 && segments[2] == "intervals" && request.Method == http.MethodPost {
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+		server.withPermission(response, request, rbac.AvailabilityManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 			server.createAvailabilityInterval(w, r, employeeID, u)
 		})
 		return true
@@ -54,19 +55,19 @@ func (server *Server) routeEmployeeAvailability(response http.ResponseWriter, re
 			writeError(response, http.StatusUnprocessableEntity, "invalid interval id")
 			return true
 		}
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+		server.withPermission(response, request, rbac.AvailabilityManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 			server.deleteAvailabilityInterval(w, r, employeeID, intervalID, u)
 		})
 		return true
 	}
 	if len(segments) == 3 && segments[2] == "calendar" && request.Method == http.MethodGet {
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
+		server.withPermission(response, request, rbac.AvailabilityRead, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
 			server.employeeAvailabilityCalendar(w, r, employeeID)
 		})
 		return true
 	}
 	if len(segments) == 3 && segments[2] == "dry-run" && request.Method == http.MethodPost {
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
+		server.withPermission(response, request, rbac.AvailabilityManage, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
 			server.employeeAvailabilityDryRun(w, r, employeeID)
 		})
 		return true

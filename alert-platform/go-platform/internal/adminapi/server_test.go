@@ -11,7 +11,43 @@ import (
 type fakeAuthenticator struct{}
 
 func (fakeAuthenticator) Authenticate(_ context.Context, username, password string) (bool, bool) {
-	return username == "admin" && password == "secret", true
+	switch {
+	case username == "admin" && password == "secret":
+		return true, true
+	case username == "engineer1" && password == "secret":
+		return true, false
+	default:
+		return false, false
+	}
+}
+
+// TestPermissionBoundaryOnNilPool — server.pool==nil falls back to a
+// role derived purely from is_admin (rbac.go resolveGrant); this test
+// exercises that fallback still enforces a real permission boundary,
+// not just "any logged-in user passes". sources.read is granted to
+// platform_admin but not to the default non-admin fallback role
+// (engineer), so a non-admin login must get 403, not 200.
+func TestPermissionBoundaryOnNilPool(t *testing.T) {
+	demo := httptest.NewServer(http.NotFoundHandler())
+	defer demo.Close()
+	server, err := New(nil, demo.URL, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.UseSessions(NewSessionManager(fakeAuthenticator{}, "test-secret", false))
+
+	login := httptest.NewRecorder()
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"username":"engineer1","password":"secret"}`)))
+	if login.Code != http.StatusOK {
+		t.Fatalf("login failed: %d %s", login.Code, login.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodGet, "/console/api/sources", nil)
+	request.AddCookie(login.Result().Cookies()[0])
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("expected 403 for a permission the fallback role lacks, got %d: %s", response.Code, response.Body.String())
+	}
 }
 
 func TestIntegrationsRequiresGoSession(t *testing.T) {

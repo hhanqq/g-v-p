@@ -23,6 +23,7 @@ import (
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/availability"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/planner"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/rbac"
 )
 
 type Server struct {
@@ -106,16 +107,21 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.sessions.login(response, request, server)
 		return
 	}
+	if server.sessions != nil && path == "/api/auth/guest-login" && request.Method == http.MethodPost {
+		server.sessions.guestLogin(response, request)
+		return
+	}
 	if server.sessions != nil && path == "/api/auth/logout" && request.Method == http.MethodPost {
 		server.sessions.logout(response)
 		return
 	}
 	if server.sessions != nil && path == "/api/auth/me" && request.Method == http.MethodGet {
-		user, err := server.sessions.currentUser(request)
+		user, err := server.currentUserWithGrant(request)
 		if err != nil {
 			writeError(response, http.StatusUnauthorized, "Не авторизован")
 			return
 		}
+		delete(user, "_grant")
 		writeJSON(response, http.StatusOK, user)
 		return
 	}
@@ -127,143 +133,143 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/home/summary" {
-		server.withAuth(response, request, server.homeSummary)
+		server.withPermission(response, request, rbac.DashboardRead, server.homeSummary)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/summary" {
-		server.withAuth(response, request, server.analyticsSummary)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsSummary)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/overview" {
-		server.withAuth(response, request, server.analyticsOverview)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsOverview)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/alerts-timeseries" {
-		server.withAuth(response, request, server.analyticsAlertsTimeseries)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsAlertsTimeseries)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/incidents-timeseries" {
-		server.withAuth(response, request, server.analyticsIncidentsTimeseries)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsIncidentsTimeseries)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/delivery" {
-		server.withAuth(response, request, server.analyticsDelivery)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsDelivery)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/sla" {
-		server.withAuth(response, request, server.analyticsSLA)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsSLA)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/equipment-top" {
-		server.withAuth(response, request, server.analyticsEquipmentTop)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsEquipmentTop)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/scenarios" {
-		server.withAuth(response, request, server.analyticsScenarios)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsScenarios)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/metrics" {
-		server.withAuth(response, request, server.homeSummary)
+		server.withPermission(response, request, rbac.DashboardRead, server.homeSummary)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/incidents" {
-		server.withAuth(response, request, server.listIncidents)
+		server.withPermission(response, request, rbac.IncidentsRead, server.listIncidents)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/incidents/") {
-		server.withAuth(response, request, server.getIncident)
+		server.withPermission(response, request, rbac.IncidentsRead, server.getIncident)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/routing-trace") && strings.HasPrefix(path, "/api/problems/") {
-		server.withAuth(response, request, server.problemRoutingTrace)
+		server.withPermission(response, request, rbac.IncidentsRead, server.problemRoutingTrace)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/alerts/filter-options" {
-		server.withAuth(response, request, server.alertFilterOptions)
+		server.withPermission(response, request, rbac.AlertsRead, server.alertFilterOptions)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/alerts" {
-		server.withAuth(response, request, server.listAlerts)
+		server.withPermission(response, request, rbac.AlertsRead, server.listAlerts)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/employees" {
-		server.withAuth(response, request, server.listEmployees)
+		server.withPermission(response, request, rbac.EmployeesRead, server.listEmployees)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/employees" {
-		server.withAuth(response, request, server.createEmployee)
+		server.withPermission(response, request, rbac.EmployeesManage, server.createEmployee)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.employeeHistory)
+		server.withPermission(response, request, rbac.EmployeesRead, server.employeeHistory)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/subscription-suggestion") && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.employeeSubscriptionSuggestion)
+		server.withPermission(response, request, rbac.EmployeesRead, server.employeeSubscriptionSuggestion)
 		return
 	}
 	if server.routeEmployeeAvailability(response, request, path) {
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.getEmployee)
+		server.withPermission(response, request, rbac.EmployeesRead, server.getEmployee)
 		return
 	}
 	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.updateEmployee)
+		server.withPermission(response, request, rbac.EmployeesManage, server.updateEmployee)
 		return
 	}
 
 	if request.Method == http.MethodGet && path == "/api/equipment" {
-		server.withAuth(response, request, server.listEquipment)
+		server.withPermission(response, request, rbac.EquipmentRead, server.listEquipment)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/equipment" {
-		server.withAuth(response, request, server.createEquipment)
+		server.withPermission(response, request, rbac.EquipmentManage, server.createEquipment)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/equipment/groups" {
-		server.withAuth(response, request, server.listEquipmentGroups)
+		server.withPermission(response, request, rbac.EquipmentRead, server.listEquipmentGroups)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/equipment/search" {
-		server.withAuth(response, request, server.equipmentSearch)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentSearch)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentHistory)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentHistory)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/summary") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentSummary)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentSummary)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/incidents") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentIncidentsList)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentIncidentsList)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/timeline") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentTimeline)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentTimeline)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/graph") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentGraph)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentGraph)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.getEquipment)
+		server.withPermission(response, request, rbac.EquipmentRead, server.getEquipment)
 		return
 	}
 	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.updateEquipment)
+		server.withPermission(response, request, rbac.EquipmentManage, server.updateEquipment)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/change-history/fields" {
-		server.withAuth(response, request, server.changeHistoryFields)
+		server.withPermission(response, request, rbac.AuditRead, server.changeHistoryFields)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/change-history/search" {
-		server.withAuth(response, request, server.changeHistorySearch)
+		server.withPermission(response, request, rbac.AuditRead, server.changeHistorySearch)
 		return
 	}
 	if server.routeScenarios(response, request, path) {
@@ -273,35 +279,38 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/sla-rules" {
-		server.withAuth(response, request, server.listSLARules)
+		server.withPermission(response, request, rbac.SLARead, server.listSLARules)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/sla-rules" {
-		server.withAuth(response, request, server.createSLARule)
+		server.withPermission(response, request, rbac.SLAManage, server.createSLARule)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/integrations/status" {
-		server.withAuth(response, request, server.integrationsStatus)
+		server.withPermission(response, request, rbac.IntegrationsRead, server.integrationsStatus)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/integrations/delivery-analytics" {
-		server.withAuth(response, request, server.deliveryAnalytics)
+		server.withPermission(response, request, rbac.IntegrationsRead, server.deliveryAnalytics)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/sources" {
-		server.withAuth(response, request, server.listSources)
+		server.withPermission(response, request, rbac.SourcesRead, server.listSources)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/sources" {
-		server.withAuth(response, request, server.addSource)
+		server.withPermission(response, request, rbac.SourcesManage, server.addSource)
 		return
 	}
 	if request.Method == http.MethodDelete && strings.HasPrefix(path, "/api/sources/") {
-		server.withAuth(response, request, server.deleteSource)
+		server.withPermission(response, request, rbac.SourcesManage, server.deleteSource)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/audit" {
-		server.withAuth(response, request, server.listAudit)
+		server.withPermission(response, request, rbac.AuditRead, server.listAudit)
+		return
+	}
+	if server.routeUsers(response, request, path) {
 		return
 	}
 
@@ -985,16 +994,20 @@ func pathInt(path, prefix string) (int64, bool) {
 type authenticatedHandler func(http.ResponseWriter, *http.Request, map[string]any)
 
 func (server *Server) withAuth(response http.ResponseWriter, request *http.Request, next authenticatedHandler) {
-	if server.sessions != nil {
-		user, err := server.sessions.currentUser(request)
-		if err != nil {
-			writeError(response, http.StatusUnauthorized, err.Error())
-			return
-		}
-		next(response, request, user)
+	if server.sessions == nil {
+		writeError(response, http.StatusUnauthorized, "требуется вход")
 		return
 	}
-	writeError(response, http.StatusUnauthorized, "требуется вход")
+	user, err := server.currentUserWithGrant(request)
+	if err != nil {
+		if errors.Is(err, errAccountInactive) {
+			writeError(response, http.StatusForbidden, err.Error())
+			return
+		}
+		writeError(response, http.StatusUnauthorized, err.Error())
+		return
+	}
+	next(response, request, user)
 }
 
 func (server *Server) auditLoginFailure(ctx context.Context, username string) {

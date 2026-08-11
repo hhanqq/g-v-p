@@ -33,9 +33,6 @@ type equipmentCreateRequest struct {
 }
 
 func (server *Server) createEquipment(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
 	var payload equipmentCreateRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -109,9 +106,6 @@ type equipmentUpdateRequest struct {
 // значение, а не очистить его — та же семантика, что и у остального
 // admin API, а не новая.
 func (server *Server) updateEquipment(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
 	rawID := strings.TrimPrefix(normalizePath(request.URL.Path), "/api/equipment/")
 	objectID, err := url.PathUnescape(rawID)
 	if err != nil || objectID == "" {

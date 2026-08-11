@@ -156,6 +156,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withPermission(response, request, rbac.DashboardRead, server.homeSummary)
 		return
 	}
+	if request.Method == http.MethodGet && path == "/api/home/overview" {
+		server.withPermission(response, request, rbac.DashboardRead, server.homeOverview)
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/analytics/summary" {
 		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsSummary)
 		return

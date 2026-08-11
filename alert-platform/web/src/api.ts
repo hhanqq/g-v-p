@@ -84,6 +84,20 @@ export interface PlatformUserDetail {
   effective_permissions: string[];
 }
 
+export interface HomeOverview {
+  kpis: { open_incidents: number; critical_active: number; no_reaction: number; sla_breaches_today: number };
+  alerts_24h: { hour: string; priority: string; count: number }[];
+  needs_attention: { kind: string; text: string; detail: string; priority?: string | null; incident_id?: number; problem_id?: number }[];
+  adp_health: ComponentStatus[];
+  resources: {
+    cpu_pct?: number; ram_pct?: number; disk_pct?: number;
+    cpu_series: number[]; ram_series: number[];
+    ai: PlatformHealth["ai"];
+  };
+  scenarios: { active_scenarios: number; runs_today: number; awaiting_reaction: number; escalations_today: number };
+  coverage: { critical_total: number; critical_fully_covered: number; gaps_next_7d: number };
+}
+
 export interface ComponentStatus {
   name: string;
   status: "normal" | "degraded" | "unknown";

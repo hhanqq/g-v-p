@@ -420,6 +420,66 @@ export interface AnalyticsSummary {
   incidents: { open_problems: number; incidents: number };
 }
 
+export interface AnalyticsOverview {
+  alerts_total: number;
+  incidents_total: number;
+  mtta_seconds: number | null;
+  mttr_seconds: number | null;
+  ack_rate_pct: number | null;
+  noise_reduction_pct: number | null;
+  noise_funnel: {
+    raw_events: number; deduplicated: number; problems_total: number;
+    incidents: number; notifications_sent: number; folded_into_existing: number;
+  };
+  priority_distribution: Record<string, number>;
+  source_distribution: { source_system: string; count: number }[];
+}
+
+export interface AlertsTimeseriesPoint { day: string; key: string; count: number }
+export interface AlertsTimeseriesResponse { series: AlertsTimeseriesPoint[]; groupby: "priority" | "source" }
+
+export interface IncidentsTimeseriesResponse {
+  series: { day: string; created: number; closed: number }[];
+  open_vs_closed: { open: number; in_progress: number; closed: number };
+}
+
+export interface DeliveryAnalytics {
+  trueconf: {
+    created: number; sent: number; failed: number; success_rate_pct: number | null;
+    requiring_ack: number; acknowledged: number; ack_rate_pct: number | null;
+    mtta_seconds: number | null; escalations: number;
+  };
+  email: {
+    created: number; sent: number; failed: number; opened: number; clicked: number;
+    open_rate_pct: number | null; ctr_pct: number | null; ctor_pct: number | null;
+  };
+  ack_rate_by_priority: { priority: string; ack_rate_pct: number | null; total: number }[];
+  mtta_distribution: { bucket: string; count: number }[];
+  ack_rate_series: { day: string; ack_rate_pct: number | null }[];
+}
+
+export interface SLAAnalytics {
+  applicable: number;
+  breached: number;
+  compliance_pct: number | null;
+  breach_series: { day: string; breaches: number }[];
+}
+
+export interface EquipmentTopAnalytics {
+  top_objects: { object_id: string; count: number; name: string; site: string | null; equipment_type: string | null }[];
+  top_symptoms: { symptom_class: string; count: number }[];
+}
+
+export interface ScenarioAnalytics {
+  total_runs: number;
+  done_runs: number;
+  no_recipient_runs: number;
+  escalated_runs: number;
+  avg_steps: number | null;
+  resolved_without_escalation_pct: number | null;
+  top_scenarios: { name: string; runs: number }[];
+}
+
 export interface IntegrationStatus {
   name: string;
   status: "active" | "planned" | "open_question";

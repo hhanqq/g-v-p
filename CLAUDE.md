@@ -140,6 +140,16 @@ ESLint, PostgreSQL integration-тесты на временной БД и migrat
 набор тяжелее и не обязателен на каждой мелкой правке, но обязателен
 перед тем, как считать крупную фичу или PR завершённой.
 
+`make pg-integration-test`/`make migration-test` требуют Docker
+(testcontainers-go сам поднимает и останавливает `pgvector/pgvector:pg16`
+— не нужно ничего готовить вручную) и собираются только по тегу
+`integration` (`go test -tags=integration ./...`), поэтому `make check`
+и обычный `go test ./...` их не запускают и не требуют Docker. Схема
+для тестов накатывается из тех же файлов `database/migrations/*.sql`,
+что и в проде (`internal/testutil.NewPostgres`), не отдельная копия.
+Новый flow, покрытый этими тестами, добавляй туда же, а не в отдельный
+параллельный тест-раннер.
+
 Для изменений схемы или planner дополнительно проверь миграции на чистой
 временной PostgreSQL БД и фактические строки `notifications` +
 `delivery_outbox`. Для admin API после сборки проверь LDAP login и основные

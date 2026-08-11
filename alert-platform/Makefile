@@ -31,8 +31,9 @@ compose-check:
 
 ## quality — полная проверка (соответствует CLAUDE.md «Проверки перед
 ## завершением», раздел X-XI ТЗ Quality Gate): всё из check плюс
-## golangci-lint и ESLint.
-quality: check go-quality web-quality
+## golangci-lint, ESLint и PostgreSQL integration/migration тесты
+## (нужен Docker — testcontainers-go поднимает реальную временную БД).
+quality: check go-quality web-quality pg-integration-test migration-test
 
 go-quality:
 	cd $(GOPLATFORM) && $(GOLANGCI_LINT) run ./...
@@ -40,12 +41,14 @@ go-quality:
 web-quality:
 	npm --prefix $(WEB) run lint
 
-## pg-integration-test / migration-test — раздел XI ТЗ (PostgreSQL
-## integration тесты на реальной временной БД, миграции на чистой и
-## существующей БД). Ещё не реализовано — не входит в quality, чтобы
-## make quality не давал ложно-зелёный результат по незакрытому пункту.
+## pg-integration-test — раздел XI ТЗ: internal/pipeline (ingest→dedup→
+## resolve, FOR UPDATE SKIP LOCKED) и internal/adminapi (resolveGrant/RBAC)
+## против реальной временной PostgreSQL (testcontainers-go, требует Docker).
 pg-integration-test:
-	@echo "pg-integration-test: не реализовано (раздел XI ТЗ Quality Gate)" >&2; exit 1
+	cd $(GOPLATFORM) && go test -tags=integration ./internal/pipeline/... ./internal/adminapi/...
 
+## migration-test — все database/migrations/*.sql на чистой БД, затем
+## повторно на той же БД (идемпотентность — CLAUDE.md: «делай повторное
+## применение безопасным»).
 migration-test:
-	@echo "migration-test: не реализовано (раздел XI ТЗ Quality Gate)" >&2; exit 1
+	cd $(GOPLATFORM) && go test -tags=integration ./internal/testutil/...

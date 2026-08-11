@@ -1076,6 +1076,15 @@ func (server *Server) withAuth(response http.ResponseWriter, request *http.Reque
 		writeError(response, http.StatusUnauthorized, err.Error())
 		return
 	}
+	// Раздел «Маскирование данных в Guest Mode» доп. ТЗ: применяется на
+	// backend для КАЖДОГО запроса гостя, единая точка для всех /api/*
+	// (см. guest_masking.go) — не точечная правка отдельных хендлеров.
+	if guest, _ := user["guest"].(bool); guest {
+		masking := newGuestMaskingWriter(response)
+		next(masking, request, user)
+		masking.flush()
+		return
+	}
 	next(response, request, user)
 }
 

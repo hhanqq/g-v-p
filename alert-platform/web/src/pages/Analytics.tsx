@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart,
   ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -12,9 +12,14 @@ import {
 import { Card, PageHeader } from "../components/ui";
 
 const PERIODS = [
-  { value: "24h", label: "24 часа" }, { value: "7d", label: "7 дней" }, { value: "14d", label: "14 дней" },
-  { value: "30d", label: "30 дней" }, { value: "90d", label: "90 дней" },
+  { value: "today", label: "Сегодня" }, { value: "24h", label: "24 часа" }, { value: "7d", label: "7 дней" },
+  { value: "14d", label: "14 дней" }, { value: "30d", label: "30 дней" }, { value: "90d", label: "90 дней" },
+  { value: "custom", label: "Произвольный" },
 ];
+
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10);
+}
 
 const PRIORITY_COLOR: Record<string, string> = { P0: "#ef4444", P1: "#f97316", P2: "#eab308", P3: "#94a3b8", unknown: "#64748b" };
 const SOURCE_COLOR: Record<string, string> = { zabbix: "#dc2626", solarwinds: "#facc15", other: "#64748b" };
@@ -57,7 +62,7 @@ function AlertsChart({ period, site }: { period: string; site: string }) {
   const [groupBy, setGroupBy] = useState<"priority" | "source">("priority");
   const { data } = useQuery<AlertsTimeseriesResponse>({
     queryKey: ["analytics-alerts-ts", period, site, groupBy],
-    queryFn: () => api.get<AlertsTimeseriesResponse>(`/analytics/alerts-timeseries?period=${period}&groupby=${groupBy}`),
+    queryFn: () => api.get<AlertsTimeseriesResponse>(`/analytics/alerts-timeseries?${period}&groupby=${groupBy}`),
   });
 
   const { rows, keys } = useMemo(() => {
@@ -109,7 +114,7 @@ function AlertsChart({ period, site }: { period: string; site: string }) {
 function IncidentsSection({ period }: { period: string }) {
   const { data } = useQuery<IncidentsTimeseriesResponse>({
     queryKey: ["analytics-incidents-ts", period],
-    queryFn: () => api.get<IncidentsTimeseriesResponse>(`/analytics/incidents-timeseries?period=${period}`),
+    queryFn: () => api.get<IncidentsTimeseriesResponse>(`/analytics/incidents-timeseries?${period}`),
   });
   const donut = data
     ? [
@@ -160,7 +165,7 @@ function IncidentsSection({ period }: { period: string }) {
 function DeliverySection({ period }: { period: string }) {
   const { data } = useQuery<DeliveryAnalytics>({
     queryKey: ["analytics-delivery", period],
-    queryFn: () => api.get<DeliveryAnalytics>(`/analytics/delivery?period=${period}`),
+    queryFn: () => api.get<DeliveryAnalytics>(`/analytics/delivery?${period}`),
   });
   if (!data) return null;
   const { trueconf, email } = data;
@@ -266,7 +271,7 @@ function DeliverySection({ period }: { period: string }) {
 function SLASection({ period }: { period: string }) {
   const { data } = useQuery<SLAAnalytics>({
     queryKey: ["analytics-sla", period],
-    queryFn: () => api.get<SLAAnalytics>(`/analytics/sla?period=${period}`),
+    queryFn: () => api.get<SLAAnalytics>(`/analytics/sla?${period}`),
   });
   if (!data) return null;
   return (
@@ -291,7 +296,7 @@ function SLASection({ period }: { period: string }) {
 function EquipmentTopSection({ period }: { period: string }) {
   const { data } = useQuery<EquipmentTopAnalytics>({
     queryKey: ["analytics-equipment-top", period],
-    queryFn: () => api.get<EquipmentTopAnalytics>(`/analytics/equipment-top?period=${period}`),
+    queryFn: () => api.get<EquipmentTopAnalytics>(`/analytics/equipment-top?${period}`),
   });
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -331,7 +336,7 @@ function EquipmentTopSection({ period }: { period: string }) {
 function ScenariosSection({ period }: { period: string }) {
   const { data } = useQuery<ScenarioAnalytics>({
     queryKey: ["analytics-scenarios", period],
-    queryFn: () => api.get<ScenarioAnalytics>(`/analytics/scenarios?period=${period}`),
+    queryFn: () => api.get<ScenarioAnalytics>(`/analytics/scenarios?${period}`),
   });
   if (!data) return null;
   return (
@@ -389,12 +394,46 @@ function NoiseReductionSection({ overview }: { overview?: AnalyticsOverview }) {
 }
 
 export default function Analytics() {
-  const [period, setPeriod] = useState("14d");
-  const [site, setSite] = useState("");
+  const [params, setParams] = useSearchParams();
+  const period = params.get("period") ?? "14d";
+  const from = params.get("from") ?? todayISO();
+  const to = params.get("to") ?? todayISO();
+  const site = params.get("site") ?? "";
+
+  function setPeriod(next: string) {
+    const nextParams = new URLSearchParams(params);
+    nextParams.set("period", next);
+    if (next === "custom") {
+      if (!params.get("from")) nextParams.set("from", from);
+      if (!params.get("to")) nextParams.set("to", to);
+    } else {
+      nextParams.delete("from");
+      nextParams.delete("to");
+    }
+    setParams(nextParams, { replace: true });
+  }
+  function setRange(nextFrom: string, nextTo: string) {
+    const nextParams = new URLSearchParams(params);
+    nextParams.set("period", "custom");
+    nextParams.set("from", nextFrom);
+    nextParams.set("to", nextTo);
+    setParams(nextParams, { replace: true });
+  }
+  function setSite(next: string) {
+    const nextParams = new URLSearchParams(params);
+    if (next) nextParams.set("site", next);
+    else nextParams.delete("site");
+    setParams(nextParams, { replace: true });
+  }
+
+  // periodQuery — единая точка формирования параметров периода для ВСЕХ
+  // секций ниже (раздел 38 доп. ТЗ: не должно быть графика, который
+  // продолжает показывать старый период после смены календаря сверху).
+  const periodQuery = period === "custom" ? `period=custom&from=${from}&to=${to}` : `period=${period}`;
 
   const { data: overview } = useQuery<AnalyticsOverview>({
-    queryKey: ["analytics-overview", period, site],
-    queryFn: () => api.get<AnalyticsOverview>(`/analytics/overview?period=${period}${site ? `&site=${site}` : ""}`),
+    queryKey: ["analytics-overview", periodQuery, site],
+    queryFn: () => api.get<AnalyticsOverview>(`/analytics/overview?${periodQuery}${site ? `&site=${site}` : ""}`),
   });
   const { data: sites } = useQuery<EquipmentGroup[]>({
     queryKey: ["equipment-groups", "root"],
@@ -417,6 +456,13 @@ export default function Analytics() {
             </button>
           ))}
         </div>
+        {period === "custom" && (
+          <div className="flex items-center gap-1 text-xs">
+            <input type="date" value={from} max={to} onChange={(e) => setRange(e.target.value, to)} className="rounded-md border border-border bg-bg px-2 py-1" />
+            <span className="text-muted">—</span>
+            <input type="date" value={to} min={from} max={todayISO()} onChange={(e) => setRange(from, e.target.value)} className="rounded-md border border-border bg-bg px-2 py-1" />
+          </div>
+        )}
         <select
           value={site}
           onChange={(e) => setSite(e.target.value)}
@@ -442,14 +488,14 @@ export default function Analytics() {
       </div>
 
       <div className="space-y-4">
-        <AlertsChart period={period} site={site} />
-        <IncidentsSection period={period} />
-        <DeliverySection period={period} />
+        <AlertsChart period={periodQuery} site={site} />
+        <IncidentsSection period={periodQuery} />
+        <DeliverySection period={periodQuery} />
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          <SLASection period={period} />
-          <ScenariosSection period={period} />
+          <SLASection period={periodQuery} />
+          <ScenariosSection period={periodQuery} />
         </div>
-        <EquipmentTopSection period={period} />
+        <EquipmentTopSection period={periodQuery} />
         <NoiseReductionSection overview={overview} />
       </div>
     </div>

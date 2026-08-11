@@ -279,6 +279,16 @@ export interface EquipmentSearchResult {
   category_label: string | null;
 }
 
+export interface EquipmentCoverage {
+  responsible_groups: { id: number; name: string }[];
+  members: { id: number; username: string; display_name: string }[];
+  policy: { id: number; name: string; min_available: number; group_id: number } | null;
+  granularity: "hour" | "day";
+  timeline: { buckets: string[]; by_member: Record<string, string[]>; available_count: number[] };
+  gaps: { from: string; to: string; min_available: number }[];
+  coverage_pct: number | null;
+}
+
 export interface EquipmentSummary {
   active_problems: number;
   open_incidents: number;

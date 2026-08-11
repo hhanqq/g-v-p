@@ -290,6 +290,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentGraph)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasSuffix(path, "/coverage") && strings.HasPrefix(path, "/api/equipment/") {
+		server.withPermission(response, request, rbac.CoverageRead, server.equipmentCoverage)
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/equipment/") {
 		server.withPermission(response, request, rbac.EquipmentRead, server.getEquipment)
 		return

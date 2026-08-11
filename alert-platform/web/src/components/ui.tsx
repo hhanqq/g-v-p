@@ -62,15 +62,3 @@ export function StatusBadge({ status }: { status: string }) {
 export function EmptyState({ children }: { children: ReactNode }) {
   return <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted">{children}</div>;
 }
-
-export function StagePlaceholder({ title, description }: { title: string; description: string }) {
-  return (
-    <Card className="border-dashed">
-      <div className="mb-2 inline-block rounded bg-fg/10 px-2 py-0.5 text-[11px] text-muted">
-        этап 2
-      </div>
-      <h3 className="mb-1 text-sm font-semibold">{title}</h3>
-      <p className="text-sm text-muted">{description}</p>
-    </Card>
-  );
-}

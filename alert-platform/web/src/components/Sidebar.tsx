@@ -18,7 +18,6 @@ interface NavItem {
   label: string;
   to: string;
   icon: LucideIcon;
-  badge?: "этап 2" | "бета";
   children?: NavChild[];
 }
 
@@ -48,10 +47,10 @@ const NAV: NavItem[] = [
     ],
   },
   { label: "Группы", to: "/groups", icon: UsersRound },
-  { label: "Покрытие", to: "/coverage", icon: ShieldCheck, badge: "бета" },
-  { label: "Сценарии", to: "/scenarios", icon: Workflow, badge: "этап 2" },
-  { label: "SLA", to: "/sla", icon: Timer, badge: "этап 2" },
-  { label: "Аналитика", to: "/analytics", icon: BarChart3, badge: "этап 2" },
+  { label: "Покрытие", to: "/coverage", icon: ShieldCheck },
+  { label: "Сценарии", to: "/scenarios", icon: Workflow },
+  { label: "SLA", to: "/sla", icon: Timer },
+  { label: "Аналитика", to: "/analytics", icon: BarChart3 },
   { label: "Интеграции", to: "/integrations", icon: Plug },
   { label: "История изменений", to: "/change-history", icon: History },
 ];
@@ -100,11 +99,6 @@ export default function Sidebar({ user }: { user: CurrentUser }) {
                   <span>{item.label}</span>
                 </span>
                 <span className="flex items-center gap-2">
-                  {item.badge && (
-                    <span className="rounded bg-fg/10 px-1.5 py-0.5 text-[10px] text-muted">
-                      {item.badge}
-                    </span>
-                  )}
                   {item.children && (
                     <span className={`text-xs transition-transform ${isExpanded ? "rotate-90" : ""}`}>›</span>
                   )}

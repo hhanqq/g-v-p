@@ -9,10 +9,12 @@ import (
 )
 
 func TestMaskPersonName(t *testing.T) {
-	if got := maskPersonName("Алексей Иванов"); got != "Алексей И*****" {
+	// full_name в проекте хранится как "Фамилия Имя Отчество" (реальный
+	// формат seed-данных) — маскируется первое слово (фамилия).
+	if got := maskPersonName("Иванов Алексей Николаевич"); got != "И***** Алексей Николаевич" {
 		t.Fatalf("got %q", got)
 	}
-	if strings.Contains(maskPersonName("Алексей Иванов"), "Иванов") {
+	if strings.Contains(maskPersonName("Иванов Алексей Николаевич"), "Иванов") {
 		t.Fatal("surname must not leak in full")
 	}
 }
@@ -67,7 +69,7 @@ func TestMaskFQDN(t *testing.T) {
 // Guest Mode»: даже без знания, какой хендлер произвёл JSON, ключи
 // full_name/trueconf_username/email маскируются.
 func TestMaskGuestJSONHidesEmployeeFields(t *testing.T) {
-	raw := `[{"id":8,"full_name":"Алексей Иванов","trueconf_username":"ivanov.an","email":"ivanov@company.local","position":"Инженер"}]`
+	raw := `[{"id":8,"full_name":"Иванов Алексей","trueconf_username":"ivanov.an","email":"ivanov@company.local","position":"Инженер"}]`
 	masked := maskGuestJSON([]byte(raw))
 	var items []map[string]any
 	if err := json.Unmarshal(masked, &items); err != nil {
@@ -135,7 +137,7 @@ func TestGuestMaskingWriterAppliesOnFlush(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	masking := newGuestMaskingWriter(recorder)
 	writeJSON(masking, http.StatusOK, map[string]any{
-		"full_name": "Алексей Иванов", "email": "ivanov@company.local",
+		"full_name": "Иванов Алексей", "email": "ivanov@company.local",
 	})
 	masking.flush()
 

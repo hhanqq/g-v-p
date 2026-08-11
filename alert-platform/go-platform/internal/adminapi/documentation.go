@@ -8,7 +8,7 @@ func (server *Server) openapi(response http.ResponseWriter) {
 	writeJSON(response, http.StatusOK, map[string]any{
 		"openapi": "3.1.0",
 		"info": map[string]any{
-			"title":   "Диспетчер — Admin API (Go)",
+			"title":   "ADP — Admin API (Go)",
 			"version": "1.0.0",
 		},
 		"paths": map[string]any{
@@ -52,5 +52,5 @@ func operation(summary string) map[string]any {
 
 func (server *Server) docs(response http.ResponseWriter) {
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = response.Write([]byte(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Диспетчер — Admin API</title><style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}code{background:#eee;padding:2px 5px;border-radius:4px}li{margin:7px 0}</style></head><body><h1>Диспетчер — Admin API (Go)</h1><p><a href="openapi.json">OpenAPI 3.1 JSON</a> · <a href="app/">React-консоль</a></p><p>Все admin endpoints используют подписанную HttpOnly cookie, полученную через <code>POST /api/auth/login</code>. Управление источниками и аудит дополнительно требуют роль <code>admins</code>.</p><ul><li><code>/api/home/summary</code> — операционные метрики</li><li><code>/api/incidents</code>, <code>/api/alerts</code> — события и инциденты</li><li><code>/api/equipment</code>, <code>/api/employees</code> — справочники</li><li><code>/api/sources</code>, <code>/api/audit</code> — admin-only</li><li><code>/api/demo/scenarios</code>, <code>/api/trigger/{id}</code> — синтетический demo-runner</li></ul></body></html>`))
+	_, _ = response.Write([]byte(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADP — Admin API</title><style>body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px}code{background:#eee;padding:2px 5px;border-radius:4px}li{margin:7px 0}</style></head><body><h1>ADP — Admin API (Go)</h1><p><a href="openapi.json">OpenAPI 3.1 JSON</a> · <a href="app/">React-консоль</a></p><p>Все admin endpoints используют подписанную HttpOnly cookie, полученную через <code>POST /api/auth/login</code>. Управление источниками и аудит дополнительно требуют роль <code>admins</code>.</p><ul><li><code>/api/home/summary</code> — операционные метрики</li><li><code>/api/incidents</code>, <code>/api/alerts</code> — события и инциденты</li><li><code>/api/equipment</code>, <code>/api/employees</code> — справочники</li><li><code>/api/sources</code>, <code>/api/audit</code> — admin-only</li><li><code>/api/demo/scenarios</code>, <code>/api/trigger/{id}</code> — синтетический demo-runner</li></ul></body></html>`))
 }

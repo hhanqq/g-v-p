@@ -1,3 +1,5 @@
+import { Menu } from "lucide-react";
+import { useState } from "react";
 import { Route, Routes, useLocation } from "react-router-dom";
 import Sidebar from "./components/Sidebar";
 import { useCurrentUser } from "./auth";
@@ -24,10 +26,12 @@ import Sources from "./pages/Sources";
 import Audit from "./pages/Audit";
 import ChangeHistory from "./pages/ChangeHistory";
 import Demo from "./pages/Demo";
+import Help from "./pages/Help";
 
 export default function App() {
   const location = useLocation();
   const { data: user, isLoading, isError } = useCurrentUser();
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // Страница «Соответствие критериям» намеренно публична — рассчитана на
   // судью/проверяющего без LDAP-логина, как и её предшественница на
@@ -45,8 +49,20 @@ export default function App() {
 
   return (
     <div className="flex h-screen">
-      <Sidebar user={user} />
-      <main className="flex-1 overflow-y-auto p-8">
+      <Sidebar user={user} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} />
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex items-center justify-between border-b border-border bg-card px-4 py-3 md:hidden">
+          <button
+            onClick={() => setMobileNavOpen(true)}
+            className="rounded p-1 text-fg hover:bg-fg/10"
+            aria-label="Открыть меню"
+          >
+            <Menu size={20} strokeWidth={1.75} />
+          </button>
+          <span className="text-sm font-semibold">ADP</span>
+          <span className="w-7" />
+        </div>
+        <main className="flex-1 overflow-y-auto p-4 md:p-8">
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/incidents" element={<Incidents />} />
@@ -70,8 +86,10 @@ export default function App() {
           <Route path="/audit" element={<Audit />} />
           <Route path="/change-history" element={<ChangeHistory />} />
           <Route path="/demo" element={<Demo />} />
+          <Route path="/help" element={<Help />} />
         </Routes>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

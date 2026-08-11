@@ -124,7 +124,7 @@ func (h *HTTPHandler) docs(response http.ResponseWriter, _ *http.Request) {
 
 const openAPISpec = `{
   "openapi":"3.1.0",
-  "info":{"title":"Диспетчер — шлюз приёма (Go)","version":"1.0.0"},
+  "info":{"title":"ADP — шлюз приёма (Go)","version":"1.0.0"},
   "paths":{
     "/api/v1/ingest/raw":{"post":{
       "summary":"Приём сырого сигнала",
@@ -150,6 +150,6 @@ const openAPISpec = `{
 
 const docsHTML = `<!doctype html><html lang="ru"><meta charset="utf-8"><title>Dispatcher Gateway API</title>
 <style>body{font:16px system-ui;max-width:920px;margin:40px auto;padding:0 20px}textarea,input{width:100%;box-sizing:border-box;margin:4px 0 12px;padding:8px}textarea{height:160px}button{padding:10px 16px}pre{background:#f4f4f5;padding:16px;white-space:pre-wrap}</style>
-<h1>Диспетчер — шлюз приёма (Go)</h1><p><a href="/openapi.json">OpenAPI 3.1</a></p>
+<h1>ADP — шлюз приёма (Go)</h1><p><a href="/openapi.json">OpenAPI 3.1</a></p>
 <h2>POST /api/v1/ingest/raw</h2><form id="f"><label>source_system</label><input id="s" value="zabbix"><label>source_instance</label><input id="i" value="zbx-demo"><label>X-Source-Token (только если задан в разделе «Источники»)</label><input id="tok" value=""><label>raw_body</label><textarea id="b">PROBLEM: demo</textarea><button>Отправить</button></form><pre id="o"></pre>
 <script>f.onsubmit=async(e)=>{e.preventDefault();let h={'content-type':'application/json'};if(tok.value)h['X-Source-Token']=tok.value;let r=await fetch('/api/v1/ingest/raw',{method:'POST',headers:h,body:JSON.stringify({source_system:s.value,source_instance:i.value,raw_body:b.value})});o.textContent=r.status+'\n'+await r.text()}</script></html>`

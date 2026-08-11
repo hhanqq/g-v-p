@@ -403,7 +403,7 @@ export default function Analytics() {
 
   return (
     <div>
-      <PageHeader title="Аналитика" subtitle="Что происходит с инфраструктурой, доходят ли сообщения, реагируют ли сотрудники, где нарушается SLA." />
+      <PageHeader title="Аналитика" helpArticle="analytics" />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="flex flex-wrap gap-1.5">

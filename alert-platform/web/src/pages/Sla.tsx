@@ -41,7 +41,7 @@ export default function Sla() {
 
   return (
     <div>
-      <PageHeader title="SLA" subtitle="Нормативы реакции/устранения и автоматические напоминания об их нарушении" />
+      <PageHeader title="SLA" helpArticle="sla" />
 
       <Card className="mb-4">
         <h3 className="mb-3 text-sm font-semibold">Новое правило</h3>

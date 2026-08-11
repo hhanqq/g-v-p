@@ -151,7 +151,7 @@ export default function Compliance() {
     <div className="mx-auto min-h-screen max-w-5xl px-4 py-10 text-fg">
       <div className="flex items-center justify-between">
         <Link to="/" className="text-sm text-accent">
-          ← платформа «Диспетчер»
+          ← платформа ADP
         </Link>
         <ThemeToggle />
       </div>

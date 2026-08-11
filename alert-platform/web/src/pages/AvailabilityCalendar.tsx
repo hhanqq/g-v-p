@@ -147,7 +147,7 @@ export default function AvailabilityCalendar() {
 
   return (
     <div>
-      <PageHeader title="Доступность" subtitle="Календарь типизированных интервалов доступности — источник для маршрутизации и сценариев" />
+      <PageHeader title="Доступность" />
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <select

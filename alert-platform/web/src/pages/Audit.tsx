@@ -6,7 +6,7 @@ export default function Audit() {
   const { data } = useQuery<AuditItem[]>({ queryKey: ["audit"], queryFn: () => api.get("/audit?limit=200") });
   return (
     <div>
-      <PageHeader title="Аудит действий" subtitle="Входы, изменения источников, подписок и доступности" />
+      <PageHeader title="Аудит действий" />
       {data?.length === 0 && <EmptyState>Журнал пока пуст</EmptyState>}
       {!!data?.length && <div className="overflow-hidden rounded-xl border border-border"><table className="w-full text-sm">
         <thead className="bg-card text-left text-xs text-muted"><tr><th className="px-4 py-2">Время</th><th className="px-4 py-2">Пользователь</th><th className="px-4 py-2">Действие</th><th className="px-4 py-2">Объект / детали</th></tr></thead>

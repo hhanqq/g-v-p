@@ -1,9 +1,35 @@
 import { ReactNode } from "react";
+import { Link } from "react-router-dom";
+import { HelpCircle } from "lucide-react";
 
-export function PageHeader({ title, subtitle }: { title: string; subtitle?: string }) {
+export function HelpButton({ articleId }: { articleId: string }) {
+  return (
+    <Link
+      to={`/help?a=${articleId}`}
+      className="inline-flex h-6 w-6 items-center justify-center rounded-full text-muted hover:bg-fg/10 hover:text-fg"
+      aria-label="Справка по этому разделу"
+      title="Справка по этому разделу"
+    >
+      <HelpCircle size={16} strokeWidth={1.75} />
+    </Link>
+  );
+}
+
+export function PageHeader({
+  title,
+  subtitle,
+  helpArticle,
+}: {
+  title: string;
+  subtitle?: string;
+  helpArticle?: string;
+}) {
   return (
     <div className="mb-6">
-      <h1 className="text-xl font-semibold">{title}</h1>
+      <div className="flex items-center gap-2">
+        <h1 className="text-xl font-semibold">{title}</h1>
+        {helpArticle && <HelpButton articleId={helpArticle} />}
+      </div>
       {subtitle && <p className="mt-1 text-sm text-muted">{subtitle}</p>}
     </div>
   );

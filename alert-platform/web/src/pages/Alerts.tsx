@@ -14,7 +14,7 @@ export default function Alerts() {
 
   return (
     <div>
-      <PageHeader title="Алерты" subtitle="Журнал всех поступивших сигналов после разбора и резолвинга" />
+      <PageHeader title="Алерты" />
 
       {isLoading && <div className="text-sm text-muted">Загрузка…</div>}
       {!isLoading && data?.items.length === 0 && <EmptyState>Событий пока нет</EmptyState>}

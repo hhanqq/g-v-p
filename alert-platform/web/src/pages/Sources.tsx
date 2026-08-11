@@ -28,7 +28,7 @@ export default function Sources() {
 
   return (
     <div>
-      <PageHeader title="Источники событий" subtitle="Регистрация нового инстанса без изменения кода и редеплоя" />
+      <PageHeader title="Источники событий" />
       <Card>
         <form onSubmit={submit} className="grid gap-3 md:grid-cols-4">
           <input required value={instance} onChange={(e) => setInstance(e.target.value)} placeholder="zbx-newsite-01" className="rounded-md border border-border bg-background px-3 py-2 text-sm" />

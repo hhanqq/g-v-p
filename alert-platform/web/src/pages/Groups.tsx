@@ -87,10 +87,7 @@ export default function Groups() {
 
   return (
     <div>
-      <PageHeader
-        title="Группы"
-        subtitle="Ответственные команды и их зона ответственности по оборудованию — используются в условиях и уведомлениях сценариев"
-      />
+      <PageHeader title="Группы" />
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-1">
           <Card className="mb-4">

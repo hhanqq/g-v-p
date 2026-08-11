@@ -371,10 +371,7 @@ export default function ScenarioEditor() {
     <div>
       <Link to="/scenarios" className="text-sm text-accent">← к списку сценариев</Link>
       <div className="mb-1 flex items-start justify-between">
-        <PageHeader
-          title={isNew ? "Новый сценарий" : "Редактирование сценария"}
-          subtitle="Условие на входе, дальше — уведомления, ожидание и развилки (проверка реакции/подписки) с ветками Да/Нет; циклы не допускаются"
-        />
+        <PageHeader title={isNew ? "Новый сценарий" : "Редактирование сценария"} />
         {!isNew && (
           <Link to={`/scenarios/${id}/stats`} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-fg/10">
             Аналитика →

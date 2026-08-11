@@ -60,10 +60,7 @@ export default function Coverage() {
 
   return (
     <div>
-      <PageHeader
-        title="Покрытие"
-        subtitle="Минимальное число одновременно доступных дежурных для критичных групп — обнаружение пробелов по календарю доступности"
-      />
+      <PageHeader title="Покрытие" helpArticle="coverage" />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">

@@ -12,7 +12,7 @@ export default function Scenarios() {
   return (
     <div>
       <div className="mb-6 flex items-start justify-between">
-        <PageHeader title="Сценарии" subtitle="Визуальный no-code конструктор обработки и эскалации алертов" />
+        <PageHeader title="Сценарии" helpArticle="scenarios" />
         <Link to="/scenarios/new" className="rounded-md bg-accent px-3 py-1.5 text-sm text-white hover:opacity-90">
           + Создать сценарий
         </Link>

@@ -14,7 +14,7 @@ export default function Incidents() {
 
   return (
     <div>
-      <PageHeader title="Инциденты" subtitle="Текущие и завершённые инциденты — свёртка проблем по первопричине" />
+      <PageHeader title="Инциденты" />
 
       <div className="mb-4 flex gap-2">
         {[

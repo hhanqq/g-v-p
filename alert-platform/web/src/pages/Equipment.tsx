@@ -292,10 +292,7 @@ export default function Equipment() {
 
   return (
     <div>
-      <PageHeader
-        title="Оборудование"
-        subtitle="Инфраструктура компании как дерево: филиал → категория → объект. Раскрывается на месте, без перехода на новый экран."
-      />
+      <PageHeader title="Оборудование" helpArticle="equipment" />
 
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <div className="relative w-72 max-w-full">

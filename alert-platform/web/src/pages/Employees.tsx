@@ -20,7 +20,7 @@ export default function Employees() {
 
   return (
     <div>
-      <PageHeader title="Сотрудники" subtitle="Ответственные, доступность, нагрузка" />
+      <PageHeader title="Сотрудники" />
 
       {isLoading && <div className="text-sm text-muted">Загрузка…</div>}
       {!isLoading && data?.length === 0 && <EmptyState>Сотрудников пока нет</EmptyState>}

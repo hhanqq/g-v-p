@@ -27,7 +27,7 @@ from services.api import metrics
 
 MAX_DEMO_WINDOW_S = 60.0
 CMDB_SEED = int(os.environ.get("CMDB_SEED", "42"))
-app = FastAPI(title="Диспетчер — demo runner")
+app = FastAPI(title="ADP — demo runner")
 
 _inventory = None
 _templates = None

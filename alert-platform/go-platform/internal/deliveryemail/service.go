@@ -195,7 +195,7 @@ func (service *Service) deliverOne(ctx context.Context, id int64) error {
 }
 
 func (service *Service) send(command outboxCommand) error {
-	subject := "Диспетчер: уведомление"
+	subject := "ADP: уведомление"
 	if command.subject != nil && *command.subject != "" {
 		subject = *command.subject
 	}

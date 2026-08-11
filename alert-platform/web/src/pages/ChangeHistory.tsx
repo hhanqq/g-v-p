@@ -66,10 +66,7 @@ export default function ChangeHistory() {
 
   return (
     <div>
-      <PageHeader
-        title="История изменений"
-        subtitle="Кто, что и когда менял в объектах, сотрудниках, группах и источниках — low-code поиск по условиям, без ручного SQL"
-      />
+      <PageHeader title="История изменений" />
 
       <Card className="mb-4">
         <div className="mb-3 flex items-center justify-between">

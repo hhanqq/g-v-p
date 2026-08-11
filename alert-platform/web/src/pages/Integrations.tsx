@@ -30,7 +30,7 @@ export default function Integrations() {
 
   return (
     <div>
-      <PageHeader title="Интеграции" subtitle="TrueConf, SMS, email, системы мониторинга, HR-системы" />
+      <PageHeader title="Интеграции" />
       <div className="space-y-2">
         {data?.map((i) => (
           <Card key={i.name} className="flex items-center justify-between">

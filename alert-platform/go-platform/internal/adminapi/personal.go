@@ -40,7 +40,7 @@ type cabinetView struct {
 
 var cabinetTemplate = template.Must(template.New("cabinet").Parse(`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Диспетчер — личный кабинет {{.Username}}</title>
+<title>ADP — личный кабинет {{.Username}}</title>
 <style>
 body{font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 16px;background:#0f172a;color:#e2e8f0}
 a{color:#60a5fa} ul{list-style:none;padding:0} li,.panel{margin-bottom:10px;padding:12px;border:1px solid #334155;border-radius:8px;background:#111c31}
@@ -369,5 +369,5 @@ func (server *Server) personalAlerts(response http.ResponseWriter, request *http
 	}
 	token := url.QueryEscape(request.URL.Query().Get("token"))
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(response, `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Диспетчер — текущие алерты</title><style>body{font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 16px;background:#0f172a;color:#e2e8f0}a{color:#60a5fa}ul{list-style:none;padding:0}li{margin-bottom:10px;padding:12px;border:1px solid #334155;border-radius:8px;background:#111c31}.muted{color:#94a3b8;font-size:13px}</style></head><body><p><a href="/console/me/%s/?token=%s">← личный кабинет подписок</a></p><h1>Текущие алерты: %s</h1><p class="muted">Алерты, соответствующие вашим подпискам.</p><ul>%s</ul></body></html>`, url.PathEscape(username), token, html.EscapeString(username), items.String())
+	fmt.Fprintf(response, `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADP — текущие алерты</title><style>body{font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 16px;background:#0f172a;color:#e2e8f0}a{color:#60a5fa}ul{list-style:none;padding:0}li{margin-bottom:10px;padding:12px;border:1px solid #334155;border-radius:8px;background:#111c31}.muted{color:#94a3b8;font-size:13px}</style></head><body><p><a href="/console/me/%s/?token=%s">← личный кабинет подписок</a></p><h1>Текущие алерты: %s</h1><p class="muted">Алерты, соответствующие вашим подпискам.</p><ul>%s</ul></body></html>`, url.PathEscape(username), token, html.EscapeString(username), items.String())
 }

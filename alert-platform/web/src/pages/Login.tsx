@@ -28,7 +28,8 @@ export default function Login() {
     <div className="relative flex h-screen items-center justify-center bg-bg">
       <ThemeToggle className="absolute right-6 top-6" />
       <form onSubmit={onSubmit} className="w-80 rounded-xl border border-border bg-card p-8">
-        <h1 className="mb-1 text-lg font-semibold">Диспетчер</h1>
+        <h1 className="mb-1 text-lg font-semibold">ADP</h1>
+        <p className="mb-0.5 text-xs text-muted">Alert Data Platform</p>
         <p className="mb-6 text-sm text-muted">Вход через корпоративный LDAP-каталог</p>
         <label className="mb-3 block text-sm">
           Логин

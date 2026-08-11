@@ -123,10 +123,7 @@ export default function ScenarioStats() {
     <div>
       <Link to="/scenarios" className="text-sm text-accent">← к списку сценариев</Link>
       <div className="mb-4 flex items-start justify-between">
-        <PageHeader
-          title={`Аналитика: ${scenario?.name ?? "…"}`}
-          subtitle="Счётчики срабатываний узлов/веток за все прогоны текущей версии графа, живой режим и трасса конкретного прогона"
-        />
+        <PageHeader title={`Аналитика: ${scenario?.name ?? "…"}`} />
         {scenario && (
           <Link to={`/scenarios/${scenario.id}/edit`} className="rounded-md bg-bg px-3 py-1.5 text-sm hover:bg-fg/10">
             К редактору

@@ -150,7 +150,11 @@ services:
       LDAP_URL: ldap://ldap:389
       LDAP_BASE_DN: dc=gpn-dispatcher,dc=local
       LDAP_SEARCH_USER: ${LDAP_SEARCH_USER:-svc-search}
-      LDAP_SEARCH_PASSWORD: ${LDAP_SEARCH_PASSWORD:-svc123}
+      # Раньше был фолбэк ":-svc123" — тот же публично известный демо-пароль
+      # прямо в исходном коде (раздел «аудит паролей»). ":?..." — Compose
+      # обязан отказать в старте, если переменная не задана, не подставлять
+      # тихий дефолт.
+      LDAP_SEARCH_PASSWORD: ${LDAP_SEARCH_PASSWORD:?LDAP_SEARCH_PASSWORD is required, see .env.example}
       DEPROVISION_INTERVAL_S: "30"
       PYTHONUNBUFFERED: "1"
     depends_on:
@@ -197,8 +201,13 @@ services:
       LDAP_URL: ldap://ldap:389
       LDAP_BASE_DN: dc=gpn-dispatcher,dc=local
       LDAP_SEARCH_USER: ${LDAP_SEARCH_USER:-svc-search}
-      LDAP_SEARCH_PASSWORD: ${LDAP_SEARCH_PASSWORD:-svc123}
-      SESSION_SECRET: ${SESSION_SECRET:-dispatcher-demo-secret}
+      # Оба фолбэка ниже раньше были ":-svc123"/":-dispatcher-demo-secret" —
+      # публично известные значения прямо в исходном коде. SESSION_SECRET
+      # особенно критичен: это ключ подписи сессионной cookie — известное
+      # значение = полный auth bypass (можно подписать себе cookie
+      # is_admin:true). ":?..." — явный отказ старта, не тихий дефолт.
+      LDAP_SEARCH_PASSWORD: ${LDAP_SEARCH_PASSWORD:?LDAP_SEARCH_PASSWORD is required, see .env.example}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET is required, see .env.example}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       CLICKHOUSE_URL: clickhouse://alert:${CLICKHOUSE_PASSWORD:-alert}@clickhouse:9000/alerting
       OLLAMA_URL: http://host.docker.internal:11434

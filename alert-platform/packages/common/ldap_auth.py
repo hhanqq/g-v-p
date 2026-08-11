@@ -19,6 +19,7 @@ LDAP/AD: обычное приложение не имеет прав искат
 from __future__ import annotations
 
 import os
+import secrets
 
 from ldap3 import Connection, Server
 from ldap3.utils.conv import escape_filter_chars
@@ -26,7 +27,14 @@ from ldap3.utils.conv import escape_filter_chars
 LDAP_URL = os.environ.get("LDAP_URL", "ldap://ldap:389")
 LDAP_BASE_DN = os.environ.get("LDAP_BASE_DN", "dc=gpn-dispatcher,dc=local")
 LDAP_SEARCH_USER = os.environ.get("LDAP_SEARCH_USER", "svc-search")
-LDAP_SEARCH_PASSWORD = os.environ.get("LDAP_SEARCH_PASSWORD", "svc123")
+# Раньше здесь был фолбэк на известную строку "svc123" — операторский
+# промах (забыли задать LDAP_SEARCH_PASSWORD) молча давал рабочий,
+# заранее известный пароль сервисной учётки. Фолбэк на случайное
+# значение сохраняет прежнее поведение импорта модуля (тесты этого
+# файла подставляют свой Connection и не читают эту переменную), но
+# при реальном запуске без переменной окружения bind просто не пройдёт
+# (safe default), а не тихо сработает с публично известным паролем.
+LDAP_SEARCH_PASSWORD = os.environ.get("LDAP_SEARCH_PASSWORD") or secrets.token_urlsafe(32)
 ADMIN_GROUP_DN = f"ou=admins,ou=groups,{LDAP_BASE_DN}"
 
 _server: Server | None = None

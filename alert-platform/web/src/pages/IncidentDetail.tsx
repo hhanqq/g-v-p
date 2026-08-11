@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, IncidentDetail as IncidentDetailType, RoutingTraceItem } from "../api";
-import { Card, PageHeader, PriorityBadge, StatusBadge } from "../components/ui";
+import { Card, formatDuration, PageHeader, PriorityBadge, StatusBadge, useNow } from "../components/ui";
 
 function RoutingTraceCard({ problemId }: { problemId: number }) {
   const { data: trace } = useQuery<RoutingTraceItem[]>({
@@ -71,11 +71,15 @@ export default function IncidentDetail() {
     queryKey: ["incident", id],
     queryFn: () => api.get<IncidentDetailType>(`/incidents/${id}`),
   });
+  const now = useNow();
 
   if (isLoading || !data) return <div className="text-sm text-muted">Загрузка…</div>;
 
   const root = data.members.find((m) => m.role === "root");
   const symptoms = data.members.filter((m) => m.role !== "root");
+  const duration = data.closed_at
+    ? formatDuration(data.opened_at, new Date(data.closed_at).getTime())
+    : formatDuration(data.opened_at, now);
 
   return (
     <div>
@@ -83,7 +87,9 @@ export default function IncidentDetail() {
       <PageHeader
         title={`INC-${String(data.id).padStart(4, "0")}`}
         subtitle={`Открыт ${new Date(data.opened_at).toLocaleString("ru-RU")}${
-          data.closed_at ? ` · закрыт ${new Date(data.closed_at).toLocaleString("ru-RU")}` : ""
+          data.closed_at
+            ? ` · закрыт ${new Date(data.closed_at).toLocaleString("ru-RU")} · длительность ${duration}`
+            : ` · в работе ${duration}`
         }`}
       />
 

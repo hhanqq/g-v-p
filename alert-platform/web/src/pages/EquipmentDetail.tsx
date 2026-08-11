@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import ReactFlow, { Background, Edge, MarkerType, Node } from "reactflow";
 import "reactflow/dist/style.css";
@@ -13,7 +13,7 @@ import {
   EquipmentSummary,
   TimelineEntry,
 } from "../api";
-import { Card, PageHeader, PriorityBadge, StatTile, StatusBadge } from "../components/ui";
+import { Card, formatDuration, PageHeader, PriorityBadge, StatTile, StatusBadge, useNow } from "../components/ui";
 import { useTheme } from "../theme";
 
 const TABS = ["overview", "problems", "incidents", "history", "graph", "links", "changes"] as const;
@@ -22,26 +22,6 @@ const TAB_LABEL: Record<Tab, string> = {
   overview: "Обзор", problems: "Текущие проблемы", incidents: "Инциденты",
   history: "История", graph: "Граф алертов", links: "Связи", changes: "Изменения",
 };
-
-// Живая длительность открытого инцидента/проблемы — обновляется раз в
-// минуту, не только при перезапросе с сервера (раздел III.13 ТЗ: «для
-// активного инцидента продолжительность должна обновляться»).
-function useNow() {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setNow(Date.now()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-  return now;
-}
-
-function formatDuration(fromISO: string, toMs: number): string {
-  const minutes = Math.max(0, Math.round((toMs - new Date(fromISO).getTime()) / 60000));
-  if (minutes < 60) return `${minutes} мин`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} ч ${minutes % 60} мин`;
-  return `${Math.floor(hours / 24)} дн ${hours % 24} ч`;
-}
 
 function IncidentRow({ incident, now }: { incident: EquipmentIncidentItem; now: number }) {
   const isOpen = !incident.closed_at;

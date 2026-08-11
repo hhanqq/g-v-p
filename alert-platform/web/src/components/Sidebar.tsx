@@ -1,12 +1,12 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
-  BarChart3, CheckCircle2, ClipboardList, HelpCircle, History, Home,
+  BarChart3, ClipboardList, HelpCircle, History, Home,
   PanelLeftClose, PanelLeftOpen, Plug, Server, ShieldCheck, Siren,
   Timer, Users, UsersRound, Workflow, CalendarDays, UserCog, Activity,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { NavLink } from "react-router-dom";
 import { api, CurrentUser, hasPermission } from "../api";
 import { ThemeToggle } from "../theme";
 
@@ -170,14 +170,6 @@ export default function Sidebar({
 
         <div className={`border-t border-border px-5 py-4 text-sm md:px-4 ${collapsed ? "md:px-2" : ""}`}>
           <ThemeToggle className={`mb-3 ${collapsed ? "md:justify-center" : ""}`} />
-          <Link
-            to="/compliance"
-            className={`mb-3 flex items-center gap-1.5 text-xs text-muted hover:text-fg ${collapsed ? "md:justify-center" : ""}`}
-            title="Соответствие критериям кейса"
-          >
-            <CheckCircle2 size={14} strokeWidth={1.75} />
-            <span className={collapsed ? "md:hidden" : ""}>Соответствие критериям кейса</span>
-          </Link>
           <div className={`mb-2 ${collapsed ? "md:hidden" : ""}`}>
             <div>{user.username}</div>
             <div className="text-xs text-muted">{user.role_label}</div>

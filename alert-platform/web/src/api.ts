@@ -156,6 +156,11 @@ export interface IncidentListItem {
   member_count: number;
 }
 
+export interface IncidentListResponse {
+  items: IncidentListItem[];
+  counts: { active: number; closed: number; total: number };
+}
+
 export interface IncidentMember {
   problem_id: number;
   role: string;

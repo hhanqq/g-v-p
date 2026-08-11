@@ -1,6 +1,26 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { HelpCircle } from "lucide-react";
+
+// Живая длительность открытого инцидента/проблемы — обновляется раз в
+// минуту, не только при перезапросе с сервера (раздел III.13 ТЗ: «для
+// активного инцидента продолжительность должна обновляться»).
+export function useNow() {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  return now;
+}
+
+export function formatDuration(fromISO: string, toMs: number): string {
+  const minutes = Math.max(0, Math.round((toMs - new Date(fromISO).getTime()) / 60000));
+  if (minutes < 60) return `${minutes} мин`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} ч ${minutes % 60} мин`;
+  return `${Math.floor(hours / 24)} дн ${hours % 24} ч`;
+}
 
 export function HelpButton({ articleId }: { articleId: string }) {
   return (

@@ -38,8 +38,8 @@ export default function Incidents() {
       {!isLoading && data?.length === 0 && <EmptyState>Инцидентов не найдено</EmptyState>}
 
       {!!data?.length && (
-        <div className="overflow-hidden rounded-xl border border-border">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-xl border border-border">
+          <table className="w-full min-w-[720px] text-sm">
             <thead className="bg-card text-left text-xs text-muted">
               <tr>
                 <th className="px-4 py-2">ID</th>

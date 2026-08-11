@@ -342,7 +342,10 @@ export default function Alerts() {
 
       {!!data?.items.length && (
         <>
-          <div className="overflow-x-auto rounded-xl border border-border">
+          {/* Десктоп — таблица со всеми колонками; на узких экранах те же
+              данные читать построчно неудобно (раздел 34 доп. ТЗ), поэтому
+              ниже — отдельный карточный список, а не сжатая таблица. */}
+          <div className="hidden overflow-x-auto rounded-xl border border-border md:block">
             <table className="w-full min-w-[900px] text-sm">
               <thead className="bg-card text-left text-xs text-muted">
                 <tr>
@@ -376,6 +379,27 @@ export default function Alerts() {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          <div className="space-y-2 md:hidden">
+            {data.items.map((a) => (
+              <div key={a.id} className="rounded-xl border border-border p-3 text-sm">
+                <div className="mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <PriorityBadge priority={a.priority} />
+                    <span className="font-medium">{a.symptom_class}</span>
+                  </span>
+                  <span className="text-xs text-muted">{new Date(a.occurred_at).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })}</span>
+                </div>
+                <div className="text-muted">{a.object_id ?? "—"}</div>
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
+                  <span>{a.source_system}</span>
+                  <span>{a.status ?? "—"}</span>
+                  <span>{a.acknowledged_at ? "ACK получен" : "ACK отсутствует"}</span>
+                  {a.incident_id && <span className="text-accent">INC-{String(a.incident_id).padStart(4, "0")}</span>}
+                </div>
+              </div>
+            ))}
           </div>
           <div className="mt-3 flex items-center justify-between text-sm text-muted">
             <span>Всего: {data.total}</span>

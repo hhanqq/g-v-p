@@ -165,8 +165,8 @@ export default function ChangeHistory() {
           {results.length === 0 ? (
             <EmptyState>По этим условиям ничего не найдено</EmptyState>
           ) : (
-            <div className="overflow-hidden rounded-xl border border-border">
-              <table className="w-full text-sm">
+            <div className="overflow-x-auto rounded-xl border border-border">
+              <table className="w-full min-w-[720px] text-sm">
                 <thead className="bg-card text-left text-xs text-muted">
                   <tr>
                     <th className="px-4 py-2">Время</th>

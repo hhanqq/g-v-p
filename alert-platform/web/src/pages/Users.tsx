@@ -27,7 +27,8 @@ export default function Users() {
             </div>
           )}
           {!!users?.length && (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="bg-bg text-left text-xs text-muted">
                 <tr>
                   <th className="px-4 py-2">Пользователь</th>
@@ -59,6 +60,7 @@ export default function Users() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </Card>
         {selectedId && meta && <UserDetailPanel userId={selectedId} meta={meta} onClose={() => setSelectedId(null)} />}

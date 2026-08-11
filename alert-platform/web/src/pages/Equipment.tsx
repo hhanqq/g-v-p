@@ -73,30 +73,49 @@ function TreeRow({
   label: string; isSelected?: boolean; status: Status; countLabel: string;
   activeProblems: number; openIncidents: number; alerts24h: number; alerts30d: number; lastEventAt: string | null;
 }) {
+  const expandButton = expandable ? (
+    <button onClick={onToggle} className="shrink-0 rounded p-0.5 hover:bg-fg/10" aria-label="Развернуть">
+      <ChevronRight size={14} className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
+    </button>
+  ) : (
+    <span className="inline-block w-[22px] shrink-0" />
+  );
+
   return (
     <div
-      className={`grid grid-cols-[1fr_repeat(5,minmax(0,72px))] items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-fg/5 ${isSelected ? "bg-accent/10" : ""}`}
+      className={`rounded-md px-2 py-1.5 text-sm hover:bg-fg/5 ${isSelected ? "bg-accent/10" : ""}`}
       style={{ paddingLeft: depth * 20 + 8 }}
     >
-      <div className="flex min-w-0 items-center gap-1.5">
-        {expandable ? (
-          <button onClick={onToggle} className="shrink-0 rounded p-0.5 hover:bg-fg/10" aria-label="Развернуть">
-            <ChevronRight size={14} className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
+      {/* Мобильный вариант — раздел 35 доп. ТЗ: дерево остаётся деревом,
+          но 5 числовых колонок сжимаются в одну строку агрегата под
+          названием, а не расползаются по горизонтали. */}
+      <div className="md:hidden">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {expandButton}
+          <button onClick={onSelectLabel} className="truncate text-left hover:text-accent hover:underline">
+            {label}
           </button>
-        ) : (
-          <span className="inline-block w-[22px] shrink-0" />
-        )}
-        <button onClick={onSelectLabel} className="truncate text-left hover:text-accent hover:underline">
-          {label}
-        </button>
-        <StatusBadge status={status} />
+          <StatusBadge status={status} />
+        </div>
+        <div className="pl-[30px] text-xs text-muted">
+          {countLabel} · {activeProblems} проблем · {openIncidents} инцид. · {alerts24h} алертов/24ч
+        </div>
       </div>
-      <div className="text-right text-xs text-muted tabular-nums">{countLabel}</div>
-      <div className="text-right text-xs tabular-nums">{activeProblems || "—"}</div>
-      <div className="text-right text-xs tabular-nums">{openIncidents || "—"}</div>
-      <div className="text-right text-xs tabular-nums">{alerts24h || "—"}</div>
-      <div className="text-right text-xs tabular-nums">
-        {lastEventAt ? new Date(lastEventAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+      <div className="hidden items-center gap-2 md:grid md:grid-cols-[1fr_repeat(5,minmax(0,72px))]">
+        <div className="flex min-w-0 items-center gap-1.5">
+          {expandButton}
+          <button onClick={onSelectLabel} className="truncate text-left hover:text-accent hover:underline">
+            {label}
+          </button>
+          <StatusBadge status={status} />
+        </div>
+        <div className="text-right text-xs text-muted tabular-nums">{countLabel}</div>
+        <div className="text-right text-xs tabular-nums">{activeProblems || "—"}</div>
+        <div className="text-right text-xs tabular-nums">{openIncidents || "—"}</div>
+        <div className="text-right text-xs tabular-nums">{alerts24h || "—"}</div>
+        <div className="text-right text-xs tabular-nums">
+          {lastEventAt ? new Date(lastEventAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+        </div>
       </div>
     </div>
   );
@@ -338,7 +357,7 @@ export default function Equipment() {
 
       <div className={`grid gap-4 ${selectedId ? "lg:grid-cols-[1fr_280px]" : ""}`}>
         <div className="rounded-xl border border-border bg-card p-2">
-          <div className="grid grid-cols-[1fr_repeat(5,minmax(0,72px))] gap-2 border-b border-border px-2 pb-1.5 text-[10px] uppercase text-muted">
+          <div className="hidden grid-cols-[1fr_repeat(5,minmax(0,72px))] gap-2 border-b border-border px-2 pb-1.5 text-[10px] uppercase text-muted md:grid">
             <div>Название</div>
             <div className="text-right">Объекты</div>
             <div className="text-right">Проблемы</div>

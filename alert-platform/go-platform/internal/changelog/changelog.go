@@ -38,6 +38,12 @@ type Event struct {
 	After        any    // маршалится в after_json; nil для delete
 	Result       string // "success" | "failure"; пусто -> "success"
 	Detail       string
+	// ActorType/InitiatedBy — раздел «ADP AI» доп. ТЗ: действие, выполненное
+	// ADP AI от имени пользователя, попадает в тот же Global Audit, но
+	// помечено actor_type="ai", initiated_by=<username>. Пусто -> "user"
+	// (обычные admin-мутации это поле не заполняют).
+	ActorType   string
+	InitiatedBy string
 }
 
 // RoleFromUser выводит actor_role из session-карты пользователя,
@@ -59,11 +65,15 @@ func Record(ctx context.Context, exec Execer, ev Event) error {
 	if result == "" {
 		result = "success"
 	}
+	actorType := ev.ActorType
+	if actorType == "" {
+		actorType = "user"
+	}
 	_, err := exec.Exec(ctx, `
-		INSERT INTO change_events(occurred_at,actor,actor_role,action,resource_type,resource_id,before_json,after_json,result,detail)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+		INSERT INTO change_events(occurred_at,actor,actor_role,action,resource_type,resource_id,before_json,after_json,result,detail,actor_type,initiated_by)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		ev.OccurredAt, ev.Actor, ev.ActorRole, ev.Action, ev.ResourceType, ev.ResourceID,
-		marshal(ev.Before), marshal(ev.After), result, nullIfEmpty(ev.Detail))
+		marshal(ev.Before), marshal(ev.After), result, nullIfEmpty(ev.Detail), actorType, nullIfEmpty(ev.InitiatedBy))
 	return err
 }
 

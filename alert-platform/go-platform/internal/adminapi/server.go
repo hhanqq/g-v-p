@@ -157,6 +157,9 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	if server.routeOrgUnits(response, request, path) {
 		return
 	}
+	if server.routeAI(response, request, path) {
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/compliance-metrics" {
 		server.complianceMetrics(response, request)
 		return

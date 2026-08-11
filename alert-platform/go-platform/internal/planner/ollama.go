@@ -64,6 +64,10 @@ func (client *OllamaClient) Embed(ctx context.Context, text string) []float32 {
 // Reachable — легковесная проверка живости Ollama для «Состояние
 // системы» (раздел 24 доп. ТЗ): GET /api/tags ничего не грузит и не
 // занимает GPU, в отличие от Ask/Embed.
+// Model — раздел «ADP AI»: имя модели пишется в ai_journal.model на
+// каждый запрос ассистента (аудит должен знать, какая модель отвечала).
+func (client *OllamaClient) Model() string { return client.model }
+
 func (client *OllamaClient) Reachable(ctx context.Context) bool {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+"/api/tags", nil)
 	if err != nil {

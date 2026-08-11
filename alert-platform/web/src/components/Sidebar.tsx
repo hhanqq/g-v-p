@@ -1,7 +1,7 @@
 import { useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3, ClipboardList, HelpCircle, History, Home,
-  PanelLeftClose, PanelLeftOpen, Plug, Server, ShieldCheck, Siren,
+  PanelLeftClose, PanelLeftOpen, Plug, Server, ShieldCheck, Siren, Sparkles,
   Timer, Users, UsersRound, Workflow, CalendarDays, UserCog, Activity,
   type LucideIcon,
 } from "lucide-react";
@@ -60,6 +60,7 @@ const GROUPS: NavGroup[] = [
       { label: "SLA", to: "/sla", icon: Timer, permission: "sla.read" },
     ],
   },
+  { title: null, items: [{ label: "ADP AI", to: "/adp-ai", icon: Sparkles, permission: "ai.use" }] },
   { title: "Данные", items: [{ label: "История изменений", to: "/change-history", icon: History, permission: "audit.read" }] },
   { title: null, items: [{ label: "Аналитика", to: "/analytics", icon: BarChart3, permission: "analytics.read" }] },
   {

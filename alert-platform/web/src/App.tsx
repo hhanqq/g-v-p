@@ -27,6 +27,7 @@ import Audit from "./pages/Audit";
 import ChangeHistory from "./pages/ChangeHistory";
 import Demo from "./pages/Demo";
 import Help from "./pages/Help";
+import AdpAi from "./pages/AdpAi";
 import Users from "./pages/Users";
 import PlatformHealthPage from "./pages/PlatformHealth";
 
@@ -93,6 +94,7 @@ export default function App() {
           <Route path="/audit" element={<Audit />} />
           <Route path="/change-history" element={<ChangeHistory />} />
           <Route path="/demo" element={<Demo />} />
+          <Route path="/adp-ai" element={<AdpAi />} />
           <Route path="/help" element={<Help />} />
           <Route path="/users" element={<Users />} />
           <Route path="/platform-health" element={<PlatformHealthPage />} />

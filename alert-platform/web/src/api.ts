@@ -744,3 +744,44 @@ export interface DemoScenario {
   name: string;
   description: string;
 }
+
+export interface AIEntityRef {
+  type: string;
+  id: string;
+  label: string;
+}
+
+export interface AIChatResponse {
+  status: "SUCCESS" | "FAILED" | "DENIED" | "CONFIRMATION_REQUIRED" | "CANCELLED";
+  message: string;
+  tool_name?: string;
+  entities?: AIEntityRef[];
+  navigate?: AIEntityRef | null;
+  data?: unknown;
+  explanation?: string;
+}
+
+export interface AITool {
+  name: string;
+  description: string;
+  action_type: string;
+}
+
+export interface AIJournalEntry {
+  id: number;
+  created_at: string;
+  username: string;
+  session_id: string | null;
+  request_text: string;
+  action_type: string;
+  tool_name: string | null;
+  resource_type: string | null;
+  resource_id: string | null;
+  result_summary: string | null;
+  status: string;
+  duration_ms: number | null;
+  model: string | null;
+  explanation: string | null;
+  error_code: string | null;
+  error_message: string | null;
+}

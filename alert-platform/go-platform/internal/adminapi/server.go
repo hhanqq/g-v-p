@@ -186,6 +186,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.listEquipmentGroups)
 		return
 	}
+	if request.Method == http.MethodGet && path == "/api/equipment/search" {
+		server.withAuth(response, request, server.equipmentSearch)
+		return
+	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/equipment/") {
 		server.withAuth(response, request, server.equipmentHistory)
 		return

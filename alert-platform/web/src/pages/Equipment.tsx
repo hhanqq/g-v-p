@@ -1,165 +1,364 @@
 import { useQuery } from "@tanstack/react-query";
-import { Link, useSearchParams } from "react-router-dom";
-import { api, EquipmentGroup, EquipmentListItem } from "../api";
-import { Card, EmptyState, PageHeader, PriorityBadge } from "../components/ui";
+import { ChevronRight, Search, X } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link } from "react-router-dom";
+import {
+  api,
+  EquipmentGroup,
+  EquipmentListItem,
+  EquipmentSearchResult,
+  EquipmentSummary,
+} from "../api";
+import { Card, PageHeader, PriorityBadge } from "../components/ui";
 
-// Раздел «Оборудование» — drill-down CMDB-explorer (не плоский список и
-// не dropdown-фильтр): филиал → категория → объект, с агрегатами на
-// каждом уровне и хлебными крошками. Состояние текущего уровня живёт в
-// query-параметрах (?site=&type=), поэтому ссылка на конкретный узел
-// дерева копируема и переживает обновление страницы.
+// Раздел «Оборудование» — интерактивное дерево (не карточки-категории и
+// не набор страниц): филиал → категория → объект, раскрывается inline
+// без перехода на новый экран. Каждый уровень грузится лениво (тот же
+// принцип, что уже был у drill-down — GET /equipment/groups[?site=] и
+// GET /equipment?site=&equipment_type=), просто теперь оба уровня живут
+// на одной странице как узлы дерева, а не как отдельные "экраны".
 
-function Breadcrumbs({ site, siteLabel, type, typeLabel }: { site?: string; siteLabel?: string; type?: string; typeLabel?: string }) {
+type Status = "critical" | "warning" | "degraded" | "normal";
+
+function statusOf(activeProblems: number, worstPriority: string | null): Status {
+  if (worstPriority === "P0") return "critical";
+  if (worstPriority === "P1") return "warning";
+  if (activeProblems > 0) return "degraded";
+  return "normal";
+}
+
+const STATUS_LABEL: Record<Status, string> = {
+  critical: "Critical", warning: "Warning", degraded: "Degraded", normal: "Normal",
+};
+const STATUS_CLASS: Record<Status, string> = {
+  critical: "bg-red-500/15 text-red-400",
+  warning: "bg-orange-500/15 text-orange-400",
+  degraded: "bg-amber-500/15 text-amber-400",
+  normal: "bg-emerald-500/15 text-emerald-400",
+};
+
+function StatusBadge({ status }: { status: Status }) {
   return (
-    <div className="mb-4 flex items-center gap-2 text-sm text-muted">
-      <Link to="/equipment" className="hover:text-accent">Оборудование</Link>
-      {site && (
-        <>
-          <span>/</span>
-          <Link to={`/equipment?site=${encodeURIComponent(site)}`} className="hover:text-accent">
-            {siteLabel ?? site}
-          </Link>
-        </>
-      )}
-      {type && (
-        <>
-          <span>/</span>
-          <span className="text-fg">{typeLabel ?? type}</span>
-        </>
+    <span className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${STATUS_CLASS[status]}`}>
+      {STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+type FilterKind = "all" | "problems" | "p0p1" | "incidents";
+const FILTERS: { value: FilterKind; label: string }[] = [
+  { value: "all", label: "Все" },
+  { value: "problems", label: "С проблемами" },
+  { value: "p0p1", label: "P0/P1" },
+  { value: "incidents", label: "Открытые инциденты" },
+];
+
+function matchesFilter(filter: FilterKind, activeProblems: number, worstPriority: string | null, openIncidents: number): boolean {
+  switch (filter) {
+    case "problems": return activeProblems > 0;
+    case "p0p1": return worstPriority === "P0" || worstPriority === "P1";
+    case "incidents": return openIncidents > 0;
+    default: return true;
+  }
+}
+
+// Общая строка дерева — филиал/категория/объект используют один и тот же
+// визуальный ряд колонок (раздел I.3 ТЗ), leaf показывает "тип" вместо
+// количества дочерних объектов.
+function TreeRow({
+  depth, expandable, expanded, onToggle, onSelectLabel, label, isSelected,
+  status, countLabel, activeProblems, openIncidents, alerts24h, alerts30d, lastEventAt,
+}: {
+  depth: number; expandable: boolean; expanded?: boolean; onToggle?: () => void; onSelectLabel: () => void;
+  label: string; isSelected?: boolean; status: Status; countLabel: string;
+  activeProblems: number; openIncidents: number; alerts24h: number; alerts30d: number; lastEventAt: string | null;
+}) {
+  return (
+    <div
+      className={`grid grid-cols-[1fr_repeat(5,minmax(0,72px))] items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-fg/5 ${isSelected ? "bg-accent/10" : ""}`}
+      style={{ paddingLeft: depth * 20 + 8 }}
+    >
+      <div className="flex min-w-0 items-center gap-1.5">
+        {expandable ? (
+          <button onClick={onToggle} className="shrink-0 rounded p-0.5 hover:bg-fg/10" aria-label="Развернуть">
+            <ChevronRight size={14} className={`transition-transform ${expanded ? "rotate-90" : ""}`} />
+          </button>
+        ) : (
+          <span className="inline-block w-[22px] shrink-0" />
+        )}
+        <button onClick={onSelectLabel} className="truncate text-left hover:text-accent hover:underline">
+          {label}
+        </button>
+        <StatusBadge status={status} />
+      </div>
+      <div className="text-right text-xs text-muted tabular-nums">{countLabel}</div>
+      <div className="text-right text-xs tabular-nums">{activeProblems || "—"}</div>
+      <div className="text-right text-xs tabular-nums">{openIncidents || "—"}</div>
+      <div className="text-right text-xs tabular-nums">{alerts24h || "—"}</div>
+      <div className="text-right text-xs tabular-nums">
+        {lastEventAt ? new Date(lastEventAt).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+      </div>
+    </div>
+  );
+}
+
+function ObjectLeaf({
+  item, depth, isSelected, onSelect,
+}: { item: EquipmentListItem; depth: number; isSelected: boolean; onSelect: (id: string) => void }) {
+  return (
+    <TreeRow
+      depth={depth} expandable={false} onSelectLabel={() => onSelect(item.id)} isSelected={isSelected}
+      label={item.name} status={statusOf(item.active_problems, item.worst_priority)}
+      countLabel={item.equipment_type ?? item.kind}
+      activeProblems={item.active_problems} openIncidents={item.open_incidents}
+      alerts24h={item.alerts_24h} alerts30d={item.alerts_30d} lastEventAt={item.last_event_at}
+    />
+  );
+}
+
+function CategoryBranch({
+  site, group, depth, expandedKeys, onToggle, filter, selectedId, onSelect,
+}: {
+  site: string; group: EquipmentGroup; depth: number; expandedKeys: Set<string>;
+  onToggle: (key: string) => void; filter: FilterKind; selectedId: string | null; onSelect: (id: string) => void;
+}) {
+  const key = `${site}|${group.key}`;
+  const expanded = expandedKeys.has(key);
+  const { data: items, isLoading } = useQuery<EquipmentListItem[]>({
+    queryKey: ["equipment-leaf", site, group.key],
+    queryFn: () => api.get<EquipmentListItem[]>(`/equipment?site=${encodeURIComponent(site)}&equipment_type=${encodeURIComponent(group.key)}`),
+    enabled: expanded,
+  });
+  const filtered = useMemo(
+    () => (items ?? []).filter((i) => matchesFilter(filter, i.active_problems, i.worst_priority, i.open_incidents)),
+    [items, filter]
+  );
+  if (filter !== "all" && !matchesFilter(filter, group.active_problems, group.worst_priority, group.open_incidents)) {
+    return null;
+  }
+  return (
+    <div>
+      <TreeRow
+        depth={depth} expandable expanded={expanded} onToggle={() => onToggle(key)} onSelectLabel={() => onToggle(key)}
+        label={group.label} status={statusOf(group.active_problems, group.worst_priority)}
+        countLabel={`${group.object_count} объектов`} activeProblems={group.active_problems}
+        openIncidents={group.open_incidents} alerts24h={group.alerts_24h} alerts30d={group.alerts_30d}
+        lastEventAt={null}
+      />
+      {expanded && (
+        <div>
+          {isLoading && <div className="py-1 text-xs text-muted" style={{ paddingLeft: (depth + 1) * 20 + 8 }}>Загрузка…</div>}
+          {!isLoading && filtered.length === 0 && (
+            <div className="py-1 text-xs text-muted" style={{ paddingLeft: (depth + 1) * 20 + 8 }}>Ничего не найдено</div>
+          )}
+          {filtered.map((item) => (
+            <ObjectLeaf key={item.id} item={item} depth={depth + 1} isSelected={selectedId === item.id} onSelect={onSelect} />
+          ))}
+        </div>
       )}
     </div>
   );
 }
 
-function HealthLine({ group }: { group: EquipmentGroup }) {
-  if (group.active_problems === 0) {
-    return <span className="text-emerald-400">проблем не зафиксировано</span>;
+function SiteBranch({
+  group, depth, expandedKeys, onToggle, filter, selectedId, onSelect,
+}: {
+  group: EquipmentGroup; depth: number; expandedKeys: Set<string>; onToggle: (key: string) => void;
+  filter: FilterKind; selectedId: string | null; onSelect: (id: string) => void;
+}) {
+  const key = group.key;
+  const expanded = expandedKeys.has(key);
+  const { data: categories, isLoading } = useQuery<EquipmentGroup[]>({
+    queryKey: ["equipment-groups", group.key],
+    queryFn: () => api.get<EquipmentGroup[]>(`/equipment/groups?site=${encodeURIComponent(group.key)}`),
+    enabled: expanded,
+  });
+  if (filter !== "all" && !matchesFilter(filter, group.active_problems, group.worst_priority, group.open_incidents)) {
+    return null;
   }
   return (
-    <span className="text-red-400">
-      {group.active_problems} проблем{group.active_problems === 1 ? "а" : "ы"} активна
-      {group.p0_active > 0 && <> · P0: {group.p0_active}</>}
-    </span>
+    <div>
+      <TreeRow
+        depth={depth} expandable expanded={expanded} onToggle={() => onToggle(key)} onSelectLabel={() => onToggle(key)}
+        label={group.label} status={statusOf(group.active_problems, group.worst_priority)}
+        countLabel={`${group.object_count} объектов`} activeProblems={group.active_problems}
+        openIncidents={group.open_incidents} alerts24h={group.alerts_24h} alerts30d={group.alerts_30d}
+        lastEventAt={null}
+      />
+      {expanded && (
+        <div>
+          {isLoading && <div className="py-1 text-xs text-muted" style={{ paddingLeft: (depth + 1) * 20 + 8 }}>Загрузка…</div>}
+          {categories?.map((cat) => (
+            <CategoryBranch
+              key={cat.key} site={group.key} group={cat} depth={depth + 1} expandedKeys={expandedKeys}
+              onToggle={onToggle} filter={filter} selectedId={selectedId} onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
-function GroupTile({ to, group }: { to: string; group: EquipmentGroup }) {
-  return (
-    <Link to={to}>
-      <Card className="h-full hover:border-accent">
-        <div className="flex items-start justify-between">
-          <div className="text-sm font-medium">{group.label}</div>
-          {group.worst_priority && <PriorityBadge priority={group.worst_priority} />}
-        </div>
-        <div className="mt-1 text-xs text-muted">{group.object_count} объектов</div>
-        <div className="mt-3 text-xs">
-          <HealthLine group={group} />
-        </div>
-        <div className="mt-2 grid grid-cols-2 gap-1 text-xs text-muted tabular-nums">
-          <div>Открытых инцидентов: {group.open_incidents}</div>
-          <div>Алертов за 24ч: {group.alerts_24h}</div>
-          <div>Алертов за 30д: {group.alerts_30d}</div>
-          <div>MTTR: {group.avg_mttr_minutes != null ? `${Math.round(group.avg_mttr_minutes)} мин` : "—"}</div>
-        </div>
-      </Card>
-    </Link>
-  );
-}
+function QuickPanel({ objectId, onClose }: { objectId: string; onClose: () => void }) {
+  const { data: summary } = useQuery<EquipmentSummary>({
+    queryKey: ["equipment-summary", objectId],
+    queryFn: () => api.get<EquipmentSummary>(`/equipment/${encodeURIComponent(objectId)}/summary`),
+  });
+  const { data } = useQuery<EquipmentListItem>({
+    queryKey: ["equipment-basic", objectId],
+    queryFn: () => api.get<EquipmentListItem>(`/equipment/${encodeURIComponent(objectId)}`),
+  });
 
-function ObjectRow({ item }: { item: EquipmentListItem }) {
   return (
-    <Link to={`/equipment/${encodeURIComponent(item.id)}`}>
-      <tr className="cursor-pointer border-b border-border last:border-0 hover:bg-card">
-        <td className="px-3 py-2 text-sm font-medium">{item.name}</td>
-        <td className="px-3 py-2">
-          {item.worst_priority ? <PriorityBadge priority={item.worst_priority} /> : (
-            <span className="text-xs text-emerald-400">Normal</span>
-          )}
-        </td>
-        <td className="px-3 py-2 text-right text-sm tabular-nums">{item.active_problems}</td>
-        <td className="px-3 py-2 text-right text-sm tabular-nums">{item.open_incidents}</td>
-        <td className="px-3 py-2 text-right text-sm tabular-nums">{item.alerts_24h}</td>
-        <td className="px-3 py-2 text-right text-sm tabular-nums">{item.alerts_30d}</td>
-        <td className="px-3 py-2 text-right text-xs text-muted">
-          {item.last_event_at ? new Date(item.last_event_at).toLocaleString("ru-RU") : "—"}
-        </td>
-      </tr>
-    </Link>
+    <Card className="sticky top-4 h-fit">
+      <div className="mb-3 flex items-start justify-between">
+        <div>
+          <div className="text-sm font-semibold">{data?.name ?? objectId}</div>
+          <div className="text-xs text-muted">{data?.site} {data?.equipment_type ? `· ${data.equipment_type}` : ""}</div>
+        </div>
+        <button onClick={onClose} className="rounded p-1 text-muted hover:bg-fg/10" aria-label="Закрыть">
+          <X size={14} />
+        </button>
+      </div>
+      <div className="mb-3">
+        <StatusBadge status={statusOf(summary?.active_problems ?? 0, summary?.worst_priority ?? null)} />
+      </div>
+      <div className="grid grid-cols-2 gap-2 text-sm">
+        <div><div className="text-xs text-muted">Активные проблемы</div>{summary?.active_problems ?? "—"}</div>
+        <div><div className="text-xs text-muted">Инциденты</div>{summary?.open_incidents ?? "—"}</div>
+        <div><div className="text-xs text-muted">Алерты 24ч</div>{summary?.alerts_24h ?? "—"}</div>
+        <div><div className="text-xs text-muted">Алерты 30д</div>{summary?.alerts_30d ?? "—"}</div>
+      </div>
+      {data && (
+        <div className="mt-3 space-y-1 text-xs text-muted">
+          {data.ip && <div>IP: {data.ip}</div>}
+          {data.fqdn && <div>FQDN: {data.fqdn}</div>}
+        </div>
+      )}
+      <Link to={`/equipment/${encodeURIComponent(objectId)}`} className="mt-4 block rounded-md bg-accent px-3 py-1.5 text-center text-sm text-white hover:opacity-90">
+        Открыть полностью →
+      </Link>
+    </Card>
   );
 }
 
 export default function Equipment() {
-  const [params] = useSearchParams();
-  const site = params.get("site") ?? undefined;
-  const equipmentType = params.get("type") ?? undefined;
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<FilterKind>("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchText, setSearchText] = useState("");
+  const [searchResults, setSearchResults] = useState<EquipmentSearchResult[] | null>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
 
-  const { data: groups, isLoading: groupsLoading } = useQuery<EquipmentGroup[]>({
-    queryKey: ["equipment-groups", site, equipmentType],
-    queryFn: () => api.get<EquipmentGroup[]>(`/equipment/groups${site ? `?site=${encodeURIComponent(site)}` : ""}`),
-    enabled: !equipmentType,
+  const { data: sites, isLoading } = useQuery<EquipmentGroup[]>({
+    queryKey: ["equipment-groups", "root"],
+    queryFn: () => api.get<EquipmentGroup[]>("/equipment/groups"),
   });
 
-  const { data: items, isLoading: itemsLoading } = useQuery<EquipmentListItem[]>({
-    queryKey: ["equipment-leaf", site, equipmentType],
-    queryFn: () =>
-      api.get<EquipmentListItem[]>(
-        `/equipment?site=${encodeURIComponent(site ?? "")}&equipment_type=${encodeURIComponent(equipmentType ?? "")}`
-      ),
-    enabled: !!equipmentType,
-  });
+  function toggle(key: string) {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
 
-  const siteLabel = groups?.find((g) => g.key === site)?.label;
-  const isLoading = equipmentType ? itemsLoading : groupsLoading;
+  useEffect(() => {
+    clearTimeout(debounceRef.current);
+    if (searchText.trim().length < 2) {
+      setSearchResults(null);
+      return;
+    }
+    debounceRef.current = setTimeout(async () => {
+      const results = await api.get<EquipmentSearchResult[]>(`/equipment/search?q=${encodeURIComponent(searchText.trim())}`);
+      setSearchResults(results);
+    }, 300);
+    return () => clearTimeout(debounceRef.current);
+  }, [searchText]);
+
+  function revealResult(result: EquipmentSearchResult) {
+    setExpandedKeys((prev) => {
+      const next = new Set(prev);
+      next.add(result.site);
+      if (result.equipment_type) next.add(`${result.site}|${result.equipment_type}`);
+      return next;
+    });
+    setSelectedId(result.id);
+    setSearchResults(null);
+    setSearchText("");
+  }
 
   return (
     <div>
       <PageHeader
         title="Оборудование"
-        subtitle="Филиал → категория → объект. Кликните на карточку, чтобы провалиться внутрь структуры."
+        subtitle="Инфраструктура компании как дерево: филиал → категория → объект. Раскрывается на месте, без перехода на новый экран."
       />
-      <Breadcrumbs site={site} siteLabel={siteLabel} type={equipmentType} />
 
-      {isLoading && <div className="text-sm text-muted">Загрузка…</div>}
-
-      {!isLoading && !equipmentType && groups?.length === 0 && <EmptyState>Ничего не найдено</EmptyState>}
-
-      {!equipmentType && groups && groups.length > 0 && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {groups.map((group) => (
-            <GroupTile
-              key={group.key}
-              to={site ? `/equipment?site=${encodeURIComponent(site)}&type=${encodeURIComponent(group.key)}` : `/equipment?site=${encodeURIComponent(group.key)}`}
-              group={group}
-            />
-          ))}
-        </div>
-      )}
-
-      {equipmentType && (
-        <div className="overflow-x-auto rounded-xl border border-border bg-card">
-          <table className="w-full text-left">
-            <thead>
-              <tr className="border-b border-border text-xs text-muted">
-                <th className="px-3 py-2">Объект</th>
-                <th className="px-3 py-2">Состояние</th>
-                <th className="px-3 py-2 text-right">Активные алерты</th>
-                <th className="px-3 py-2 text-right">Открытые инциденты</th>
-                <th className="px-3 py-2 text-right">24 ч</th>
-                <th className="px-3 py-2 text-right">30 дней</th>
-                <th className="px-3 py-2 text-right">Последнее событие</th>
-              </tr>
-            </thead>
-            <tbody>
-              {items?.map((item) => <ObjectRow key={item.id} item={item} />)}
-            </tbody>
-          </table>
-          {!itemsLoading && items?.length === 0 && (
-            <div className="p-6">
-              <EmptyState>Объектов в этой категории не найдено</EmptyState>
+      <div className="mb-3 flex flex-wrap items-center gap-3">
+        <div className="relative w-72 max-w-full">
+          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted" />
+          <input
+            value={searchText}
+            onChange={(e) => setSearchText(e.target.value)}
+            placeholder="Поиск оборудования…"
+            className="w-full rounded-md border border-border bg-bg py-1.5 pl-8 pr-2 text-sm"
+          />
+          {searchResults && searchResults.length > 0 && (
+            <div className="absolute z-10 mt-1 w-full rounded-md border border-border bg-card shadow-lg">
+              {searchResults.map((r) => (
+                <button
+                  key={r.id}
+                  onClick={() => revealResult(r)}
+                  className="block w-full truncate px-3 py-1.5 text-left text-sm hover:bg-fg/5"
+                >
+                  <span className="font-medium">{r.name}</span>
+                  <span className="text-muted"> — {r.site_label}{r.category_label ? ` / ${r.category_label}` : ""}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {searchResults && searchResults.length === 0 && (
+            <div className="absolute z-10 mt-1 w-full rounded-md border border-border bg-card px-3 py-1.5 text-sm text-muted shadow-lg">
+              Ничего не найдено
             </div>
           )}
         </div>
-      )}
+        <div className="flex flex-wrap gap-1.5">
+          {FILTERS.map((f) => (
+            <button
+              key={f.value}
+              onClick={() => setFilter(f.value)}
+              className={`rounded-md px-2.5 py-1 text-xs font-medium ${filter === f.value ? "bg-accent text-white" : "bg-card text-muted hover:bg-fg/5"}`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={`grid gap-4 ${selectedId ? "lg:grid-cols-[1fr_280px]" : ""}`}>
+        <div className="rounded-xl border border-border bg-card p-2">
+          <div className="grid grid-cols-[1fr_repeat(5,minmax(0,72px))] gap-2 border-b border-border px-2 pb-1.5 text-[10px] uppercase text-muted">
+            <div>Название</div>
+            <div className="text-right">Объекты</div>
+            <div className="text-right">Проблемы</div>
+            <div className="text-right">Инциденты</div>
+            <div className="text-right">24ч</div>
+            <div className="text-right">Событие</div>
+          </div>
+          {isLoading && <div className="p-3 text-sm text-muted">Загрузка…</div>}
+          {sites?.map((site) => (
+            <SiteBranch
+              key={site.key} group={site} depth={0} expandedKeys={expandedKeys} onToggle={toggle}
+              filter={filter} selectedId={selectedId} onSelect={setSelectedId}
+            />
+          ))}
+        </div>
+        {selectedId && <QuickPanel objectId={selectedId} onClose={() => setSelectedId(null)} />}
+      </div>
     </div>
   );
 }

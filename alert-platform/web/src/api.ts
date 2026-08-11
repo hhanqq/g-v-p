@@ -155,6 +155,15 @@ export interface EquipmentGroup {
   worst_priority: string | null;
 }
 
+export interface EquipmentSearchResult {
+  id: string;
+  name: string;
+  site: string;
+  site_label: string;
+  equipment_type: string | null;
+  category_label: string | null;
+}
+
 export interface EquipmentSummary {
   active_problems: number;
   open_incidents: number;

@@ -122,69 +122,98 @@ func (server *Server) aiChat(response http.ResponseWriter, request *http.Request
 		return
 	}
 
+	dispatch := server.aiDispatchTool(ctx, grant, toolName, params)
+	durationMs := int(time.Since(started).Milliseconds())
+	server.recordAIJournal(ctx, aiJournalEntry{
+		Username: username, SessionID: payload.SessionID, RequestText: payload.Message,
+		ActionType: dispatch.ActionType, ToolName: dispatch.ToolName, ResourceType: dispatch.ResourceType,
+		ResourceID: dispatch.ResourceID, InputParameters: marshalOrNil(params),
+		ResultSummary: dispatch.Message, Status: dispatch.Status, ErrorCode: dispatch.ErrorCode,
+		ErrorMessage: dispatch.ErrorMessage, DurationMs: durationMs, Model: server.ollama.Model(),
+	})
+	// Значимое действие (не просто навигация) — также в общий Global Audit,
+	// раздел ТЗ: цепочка user→AI-запрос→tool→доменное действие→результат
+	// видна в одном месте, не только в ai_journal.
+	if dispatch.Status == "SUCCESS" && dispatch.ActionType != "navigate" && server.pool != nil {
+		_ = changelog.Record(ctx, server.pool, changelog.Event{
+			OccurredAt: time.Now().UTC(), Actor: "ADP AI", ActorRole: "ai",
+			ActorType: "ai", InitiatedBy: username,
+			Action: "ai." + dispatch.ToolName, ResourceType: dispatch.ResourceType, ResourceID: dispatch.ResourceID,
+			After: dispatch.Data, Result: "success",
+		})
+	}
+	writeJSON(response, http.StatusOK, aiChatResponse{
+		Status: dispatch.Status, Message: dispatch.Message, ToolName: dispatch.ToolName,
+		Entities: dispatch.Entities, Navigate: dispatch.Navigate, Data: dispatch.Data,
+	})
+}
+
+func marshalOrNil(v any) json.RawMessage {
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return json.RawMessage(encoded)
+}
+
+// aiDispatchResult — исход попытки выполнить один tool, независимо от
+// того, как был выбран toolName (реальным Ollama-вызовом в aiChat или
+// напрямую в тесте адверсарным значением — см. ai_security_test.go).
+// Разделение специально сделано так, чтобы security-тесты могли
+// проверить «даже если LLM решила вызвать X с параметрами Y, backend
+// либо выполняет только разрешённое, либо возвращает DENIED/FAILED»
+// без необходимости поднимать реальную/фейковую LLM.
+type aiDispatchResult struct {
+	Status       string
+	Message      string
+	ToolName     string
+	ActionType   string
+	ResourceType string
+	ResourceID   string
+	ErrorCode    string
+	ErrorMessage string
+	Entities     []aiEntityRef
+	Navigate     *aiEntityRef
+	Data         any
+}
+
+// aiDispatchTool — единственная точка, где имя инструмента, выбранное
+// (моделью или тестом), превращается в реальное действие. Основная
+// security boundary раздела «Prompt Injection» доп. ТЗ: LLM → Tool
+// Registry → schema validation (findAITool) → authorization
+// (grant.Has) → domain use case (tool.Execute) → audit. Ни один шаг
+// не пропускается независимо от того, что LLM "решила".
+func (server *Server) aiDispatchTool(ctx context.Context, grant rbac.Grant, toolName string, params map[string]any) aiDispatchResult {
 	tool, known := findAITool(toolName)
 	if !known {
-		server.recordAIJournal(ctx, aiJournalEntry{
-			Username: username, SessionID: payload.SessionID, RequestText: payload.Message, ToolName: toolName,
-			ActionType: "read", Status: "FAILED", ErrorCode: "unknown_tool",
-			DurationMs: int(time.Since(started).Milliseconds()), Model: server.ollama.Model(),
-		})
-		writeJSON(response, http.StatusOK, aiChatResponse{Status: "FAILED", Message: "Не понял запрос — попробуйте переформулировать."})
-		return
+		return aiDispatchResult{
+			Status: "FAILED", ErrorCode: "unknown_tool", ToolName: toolName,
+			Message: "Не понял запрос — попробуйте переформулировать.",
+		}
 	}
-
 	if tool.Permission != "" && !grant.Has(tool.Permission) {
-		server.recordAIJournal(ctx, aiJournalEntry{
-			Username: username, SessionID: payload.SessionID, RequestText: payload.Message,
-			ActionType: tool.ActionType, ToolName: tool.Name, ResourceType: tool.ResourceType,
-			Status: "DENIED", ErrorCode: "permission_denied", ErrorMessage: string(tool.Permission),
-			DurationMs: int(time.Since(started).Milliseconds()), Model: server.ollama.Model(),
-		})
-		writeJSON(response, http.StatusOK, aiChatResponse{
-			Status: "DENIED", Message: "Недостаточно прав для этого запроса: " + string(tool.Permission),
-		})
-		return
+		return aiDispatchResult{
+			Status: "DENIED", ToolName: tool.Name, ActionType: tool.ActionType, ResourceType: tool.ResourceType,
+			ErrorCode: "permission_denied", ErrorMessage: string(tool.Permission),
+			Message: "Недостаточно прав для этого запроса: " + string(tool.Permission),
+		}
 	}
-
 	result, err := tool.Execute(ctx, server, grant, params)
-	durationMs := int(time.Since(started).Milliseconds())
 	if err != nil {
 		status, errorCode, message := "FAILED", "execution_error", "Не удалось выполнить запрос."
 		if errors.Is(err, errAIPermissionDenied) {
 			status, errorCode, message = "DENIED", "permission_denied", "Недостаточно прав для этого запроса."
 		}
-		server.recordAIJournal(ctx, aiJournalEntry{
-			Username: username, SessionID: payload.SessionID, RequestText: payload.Message,
-			ActionType: tool.ActionType, ToolName: tool.Name, ResourceType: tool.ResourceType,
-			Status: status, ErrorCode: errorCode, ErrorMessage: err.Error(),
-			DurationMs: durationMs, Model: server.ollama.Model(),
-		})
-		writeJSON(response, http.StatusOK, aiChatResponse{Status: status, Message: message})
-		return
+		return aiDispatchResult{
+			Status: status, ToolName: tool.Name, ActionType: tool.ActionType, ResourceType: tool.ResourceType,
+			ErrorCode: errorCode, ErrorMessage: err.Error(), Message: message,
+		}
 	}
-
-	inputJSON, _ := json.Marshal(params)
-	server.recordAIJournal(ctx, aiJournalEntry{
-		Username: username, SessionID: payload.SessionID, RequestText: payload.Message,
-		ActionType: tool.ActionType, ToolName: tool.Name, ResourceType: tool.ResourceType,
-		ResourceID: firstEntityID(result), InputParameters: json.RawMessage(inputJSON),
-		ResultSummary: result.Summary, Status: "SUCCESS", DurationMs: durationMs, Model: server.ollama.Model(),
-	})
-	// Значимое действие (не просто навигация) — также в общий Global Audit,
-	// раздел ТЗ: цепочка user→AI-запрос→tool→доменное действие→результат
-	// видна в одном месте, не только в ai_journal.
-	if tool.ActionType != "navigate" && server.pool != nil {
-		_ = changelog.Record(ctx, server.pool, changelog.Event{
-			OccurredAt: time.Now().UTC(), Actor: "ADP AI", ActorRole: "ai",
-			ActorType: "ai", InitiatedBy: username,
-			Action: "ai." + tool.Name, ResourceType: tool.ResourceType, ResourceID: firstEntityID(result),
-			After: result.Data, Result: "success",
-		})
-	}
-	writeJSON(response, http.StatusOK, aiChatResponse{
-		Status: "SUCCESS", Message: result.Summary, ToolName: tool.Name,
+	return aiDispatchResult{
+		Status: "SUCCESS", ToolName: tool.Name, ActionType: tool.ActionType, ResourceType: tool.ResourceType,
+		ResourceID: firstEntityID(result), Message: result.Summary,
 		Entities: result.Entities, Navigate: result.Navigate, Data: result.Data,
-	})
+	}
 }
 
 func firstEntityID(result *aiToolResult) string {

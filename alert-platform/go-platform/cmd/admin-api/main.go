@@ -96,9 +96,10 @@ func main() {
 	}
 	go func() {
 		<-ctx.Done()
+		// ctx уже отменён сигналом; shutdown нужен независимый timeout, не унаследованный от отменённого ctx
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = server.Shutdown(shutdownCtx)
+		_ = server.Shutdown(shutdownCtx) //nolint:contextcheck
 	}()
 	log.Printf("admin-api: Go facade started on %s", server.Addr)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

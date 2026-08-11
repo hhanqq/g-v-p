@@ -104,7 +104,7 @@ func buildQuery(req SearchRequest) (query string, args []any, err error) {
 		case "gte", "lte":
 			parsed, perr := time.Parse(time.RFC3339, cond.Value)
 			if perr != nil {
-				return "", nil, fmt.Errorf("некорректная дата для поля %q, ожидается RFC3339: %v", cond.Field, perr)
+				return "", nil, fmt.Errorf("некорректная дата для поля %q, ожидается RFC3339: %w", cond.Field, perr)
 			}
 			operator := ">="
 			if cond.Op == "lte" {
@@ -133,7 +133,7 @@ func Search(ctx context.Context, conn clickhouse.Conn, req SearchRequest) ([]Sea
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	items := make([]SearchResult, 0)
 	for rows.Next() {
 		var item SearchResult

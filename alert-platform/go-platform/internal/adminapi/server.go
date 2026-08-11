@@ -511,21 +511,37 @@ func round(value float64, digits int) float64 {
 	return math.Round(value*factor) / factor
 }
 
+// listIncidents — вкладки Активные/Завершённые/Все (раздел «Инциденты» доп.
+// ТЗ). Единственный источник правды жизненного цикла инцидента —
+// incidents.closed_at (см. closeIncidentIfAllResolved в pipeline/state.go:
+// закрывается только когда ВСЕ проблемы-участники реально RESOLVED).
+// Раньше фильтр status= здесь ошибочно смотрел на root.status одной
+// проблемы — инцидент с уже резолвнутым root, но ещё открытыми
+// сиблингами, неверно попадал бы во вкладку «Завершённые», хотя
+// closed_at ещё NULL. Фильтр теперь в SQL WHERE (не пост-фильтр после
+// LIMIT), иначе limit+status вместе теряли записи.
 func (server *Server) listIncidents(response http.ResponseWriter, request *http.Request, _ map[string]any) {
 	limit := queryInt(request, "limit", 100)
+	statusFilter := request.URL.Query().Get("status")
+	statusWhere := ""
+	switch statusFilter {
+	case "open":
+		statusWhere = " WHERE incident.closed_at IS NULL"
+	case "closed":
+		statusWhere = " WHERE incident.closed_at IS NOT NULL"
+	}
 	rows, err := server.pool.Query(request.Context(), `
 		SELECT incident.id,incident.priority,incident.opened_at,incident.closed_at,
 		       root.object_id,root.symptom_class,root.status,
 		       (SELECT COUNT(*) FROM incident_problems member WHERE member.incident_id=incident.id)
 		FROM incidents incident
-		LEFT JOIN problems root ON root.id=incident.root_problem_id
+		LEFT JOIN problems root ON root.id=incident.root_problem_id`+statusWhere+`
 		ORDER BY incident.id DESC LIMIT $1`, limit)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
 	defer rows.Close()
-	statusFilter := request.URL.Query().Get("status")
 	items := make([]map[string]any, 0)
 	for rows.Next() {
 		var id, memberCount int64
@@ -535,10 +551,6 @@ func (server *Server) listIncidents(response http.ResponseWriter, request *http.
 		if err := rows.Scan(&id, &priority, &openedAt, &closedAt, &objectID, &symptomClass, &status, &memberCount); err != nil {
 			writeError(response, http.StatusInternalServerError, "scan incidents")
 			return
-		}
-		isOpen := status.Valid && (status.String == "OPEN" || status.String == "FLAPPING")
-		if statusFilter == "open" && !isOpen || statusFilter == "closed" && isOpen {
-			continue
 		}
 		items = append(items, map[string]any{
 			"id": id, "priority": nullableString(priority), "opened_at": formatISO(openedAt),
@@ -551,7 +563,19 @@ func (server *Server) listIncidents(response http.ResponseWriter, request *http.
 		writeError(response, http.StatusInternalServerError, "load incidents")
 		return
 	}
-	writeJSON(response, http.StatusOK, items)
+	var activeCount, closedCount int64
+	if err := server.pool.QueryRow(request.Context(), `
+		SELECT count(*) FILTER (WHERE closed_at IS NULL), count(*) FILTER (WHERE closed_at IS NOT NULL)
+		FROM incidents`).Scan(&activeCount, &closedCount); err != nil {
+		writeError(response, http.StatusServiceUnavailable, "database unavailable")
+		return
+	}
+	writeJSON(response, http.StatusOK, map[string]any{
+		"items": items,
+		"counts": map[string]any{
+			"active": activeCount, "closed": closedCount, "total": activeCount + closedCount,
+		},
+	})
 }
 
 func (server *Server) getIncident(response http.ResponseWriter, request *http.Request, _ map[string]any) {
@@ -954,14 +978,15 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 		}
 		validUntil = &parsed
 	}
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	var username string
-	if err := tx.QueryRow(request.Context(), `SELECT trueconf_username FROM subscribers WHERE id=$1 FOR UPDATE`, id).Scan(&username); errors.Is(err, pgx.ErrNoRows) {
+	if err := tx.QueryRow(ctx, `SELECT trueconf_username FROM subscribers WHERE id=$1 FOR UPDATE`, id).Scan(&username); errors.Is(err, pgx.ErrNoRows) {
 		writeError(response, http.StatusNotFound, "Сотрудник не найден")
 		return
 	} else if err != nil {
@@ -974,12 +999,12 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 	// произвольных интервалов (следующий этап) через этот путь не идёт —
 	// там пересекающиеся интервалы обязаны сосуществовать и решаться
 	// приоритетом при чтении (internal/availability), а не закрытием.
-	if _, err = tx.Exec(request.Context(), `UPDATE employee_availability SET valid_until=$2 WHERE subscriber_id=$1 AND valid_until IS NULL AND valid_from<=$2`, id, now); err != nil {
+	if _, err = tx.Exec(ctx, `UPDATE employee_availability SET valid_until=$2 WHERE subscriber_id=$1 AND valid_until IS NULL AND valid_from<=$2`, id, now); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
 	var availabilityID int64
-	err = tx.QueryRow(request.Context(), `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO employee_availability(subscriber_id,kind,delegate_to_subscriber_id,valid_from,valid_until,source,note,created_at)
 		VALUES($1,$2,$3,$4,$5,'manual',$6,$4) RETURNING id`,
 		id, payload.Kind, payload.DelegateToSubscriberID, now, validUntil, payload.Note).Scan(&availabilityID)
@@ -988,12 +1013,12 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 		return
 	}
 	actor, _ := user["username"].(string)
-	_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'set_availability',$2,$3,$4)`, actor, username, payload.Kind, now)
+	_, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'set_availability',$2,$3,$4)`, actor, username, payload.Kind, now)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	if err := changelog.Record(request.Context(), tx, changelog.Event{
+	if err := changelog.Record(ctx, tx, changelog.Event{
 		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "subscriber.set_availability",
 		ResourceType: "subscriber", ResourceID: strconv.FormatInt(id, 10),
 		After: map[string]any{"kind": payload.Kind, "valid_until": payload.ValidUntil, "note": payload.Note},
@@ -1001,7 +1026,7 @@ func (server *Server) setEmployeeAvailability(response http.ResponseWriter, requ
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	if err := tx.Commit(request.Context()); err != nil {
+	if err := tx.Commit(ctx); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
@@ -1073,10 +1098,6 @@ func normalizePath(path string) string {
 		return strings.TrimPrefix(path, "/console")
 	}
 	return path
-}
-
-func joinURLPath(base, path string) string {
-	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(path, "/")
 }
 
 func (server *Server) serveSPA(response http.ResponseWriter, request *http.Request, normalizedPath string) {

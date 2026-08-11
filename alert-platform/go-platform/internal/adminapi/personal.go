@@ -211,26 +211,27 @@ func (server *Server) subscribePersonal(response http.ResponseWriter, request *h
 		writeError(response, http.StatusUnprocessableEntity, "invalid priority")
 		return
 	}
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	now := time.Now().UTC()
-	_, err = tx.Exec(request.Context(), `INSERT INTO subscriptions(subscriber_id,subsidiary,service_id,priority_threshold,created_at) VALUES($1,$2,$3,$4,$5)`, subscriberID, subsidiary, serviceID, priority, now)
+	_, err = tx.Exec(ctx, `INSERT INTO subscriptions(subscriber_id,subsidiary,service_id,priority_threshold,created_at) VALUES($1,$2,$3,$4,$5)`, subscriberID, subsidiary, serviceID, priority, now)
 	if err == nil {
 		detail := "subsidiary=" + valueOrStar(subsidiary) + " service=" + valueOrStar(serviceID) + " priority<=" + valueOrStar(priority)
-		_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,detail,created_at) VALUES($1,'subscribe',$2,$3)`, username, detail, now)
+		_, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,detail,created_at) VALUES($1,'subscribe',$2,$3)`, username, detail, now)
 	}
 	if err == nil {
-		err = changelog.Record(request.Context(), tx, changelog.Event{
+		err = changelog.Record(ctx, tx, changelog.Event{
 			OccurredAt: now, Actor: username, ActorRole: "user", Action: "subscription.create",
 			ResourceType: "subscription", ResourceID: strconv.FormatInt(subscriberID, 10),
 			After: map[string]any{"subsidiary": subsidiary, "service_id": serviceID, "priority_threshold": priority},
 		})
 	}
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
@@ -248,30 +249,31 @@ func (server *Server) unsubscribePersonal(response http.ResponseWriter, request 
 		writeError(response, http.StatusUnprocessableEntity, "invalid subscription id")
 		return
 	}
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	var subsidiary, serviceID sql.NullString
-	err = tx.QueryRow(request.Context(), `DELETE FROM subscriptions WHERE id=$1 AND subscriber_id=$2 RETURNING subsidiary,service_id`, id, subscriberID).Scan(&subsidiary, &serviceID)
+	err = tx.QueryRow(ctx, `DELETE FROM subscriptions WHERE id=$1 AND subscriber_id=$2 RETURNING subsidiary,service_id`, id, subscriberID).Scan(&subsidiary, &serviceID)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
 	if err == nil {
 		now := time.Now().UTC()
-		_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,detail,created_at) VALUES($1,'unsubscribe',$2,$3)`, username, "subsidiary="+nullOrStar(subsidiary)+" service="+nullOrStar(serviceID), now)
+		_, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,detail,created_at) VALUES($1,'unsubscribe',$2,$3)`, username, "subsidiary="+nullOrStar(subsidiary)+" service="+nullOrStar(serviceID), now)
 		if err == nil {
-			err = changelog.Record(request.Context(), tx, changelog.Event{
+			err = changelog.Record(ctx, tx, changelog.Event{
 				OccurredAt: now, Actor: username, ActorRole: "user", Action: "subscription.delete",
 				ResourceType: "subscription", ResourceID: strconv.FormatInt(subscriberID, 10),
 				Before: map[string]any{"subscription_id": id, "subsidiary": nullableString(subsidiary), "service_id": nullableString(serviceID)},
 			})
 		}
 	}
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
@@ -369,5 +371,5 @@ func (server *Server) personalAlerts(response http.ResponseWriter, request *http
 	}
 	token := url.QueryEscape(request.URL.Query().Get("token"))
 	response.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(response, `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADP — текущие алерты</title><style>body{font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 16px;background:#0f172a;color:#e2e8f0}a{color:#60a5fa}ul{list-style:none;padding:0}li{margin-bottom:10px;padding:12px;border:1px solid #334155;border-radius:8px;background:#111c31}.muted{color:#94a3b8;font-size:13px}</style></head><body><p><a href="/console/me/%s/?token=%s">← личный кабинет подписок</a></p><h1>Текущие алерты: %s</h1><p class="muted">Алерты, соответствующие вашим подпискам.</p><ul>%s</ul></body></html>`, url.PathEscape(username), token, html.EscapeString(username), items.String())
+	_, _ = fmt.Fprintf(response, `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>ADP — текущие алерты</title><style>body{font-family:system-ui,sans-serif;max-width:680px;margin:40px auto;padding:0 16px;background:#0f172a;color:#e2e8f0}a{color:#60a5fa}ul{list-style:none;padding:0}li{margin-bottom:10px;padding:12px;border:1px solid #334155;border-radius:8px;background:#111c31}.muted{color:#94a3b8;font-size:13px}</style></head><body><p><a href="/console/me/%s/?token=%s">← личный кабинет подписок</a></p><h1>Текущие алерты: %s</h1><p class="muted">Алерты, соответствующие вашим подпискам.</p><ul>%s</ul></body></html>`, url.PathEscape(username), token, html.EscapeString(username), items.String())
 }

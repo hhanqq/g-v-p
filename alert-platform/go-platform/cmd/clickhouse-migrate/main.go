@@ -26,7 +26,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("clickhouse-migrate: connect: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	files, err := filepath.Glob(filepath.Join(dir, "*.sql"))
 	if err != nil {

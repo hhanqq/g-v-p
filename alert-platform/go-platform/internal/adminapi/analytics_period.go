@@ -60,7 +60,3 @@ func parseOptionalRange(request *http.Request) *analyticsRange {
 func siteFilter(request *http.Request) string {
 	return request.URL.Query().Get("site")
 }
-
-func priorityFilter(request *http.Request) string {
-	return request.URL.Query().Get("priority")
-}

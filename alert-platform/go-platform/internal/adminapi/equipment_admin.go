@@ -55,13 +55,14 @@ func (server *Server) createEquipment(response http.ResponseWriter, request *htt
 	}
 	actor, _ := user["username"].(string)
 	now := time.Now().UTC()
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
-	_, err = tx.Exec(request.Context(), `
+	defer func() { _ = tx.Rollback(ctx) }()
+	_, err = tx.Exec(ctx, `
 		INSERT INTO cmdb_objects(id,kind,site,name,fqdn,ip,subnet,equipment_type,install_date,spec_json)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
 		payload.ID, payload.Kind, payload.Site, payload.Name, payload.FQDN, payload.IP, payload.Subnet,
@@ -74,7 +75,7 @@ func (server *Server) createEquipment(response http.ResponseWriter, request *htt
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	err = changelog.Record(request.Context(), tx, changelog.Event{
+	err = changelog.Record(ctx, tx, changelog.Event{
 		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "cmdb_object.create",
 		ResourceType: "cmdb_object", ResourceID: payload.ID,
 		After: map[string]any{
@@ -83,7 +84,7 @@ func (server *Server) createEquipment(response http.ResponseWriter, request *htt
 			"install_date": payload.InstallDate, "spec_json": payload.SpecJSON,
 		},
 	})
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
@@ -126,17 +127,18 @@ func (server *Server) updateEquipment(response http.ResponseWriter, request *htt
 	}
 	actor, _ := user["username"].(string)
 	now := time.Now().UTC()
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var beforeName, beforeSite string
 	var beforeFQDN, beforeIP, beforeSubnet, beforeEquipmentType, beforeSpecJSON sql.NullString
 	var beforeInstallDate sql.NullTime
-	err = tx.QueryRow(request.Context(), `
+	err = tx.QueryRow(ctx, `
 		SELECT name,site,fqdn,ip,subnet,equipment_type,install_date,spec_json FROM cmdb_objects WHERE id=$1 FOR UPDATE`,
 		objectID,
 	).Scan(&beforeName, &beforeSite, &beforeFQDN, &beforeIP, &beforeSubnet, &beforeEquipmentType, &beforeInstallDate, &beforeSpecJSON)
@@ -152,7 +154,7 @@ func (server *Server) updateEquipment(response http.ResponseWriter, request *htt
 	var name, site string
 	var fqdn, ip, subnet, equipmentType, specJSON sql.NullString
 	var resultInstallDate sql.NullTime
-	err = tx.QueryRow(request.Context(), `
+	err = tx.QueryRow(ctx, `
 		UPDATE cmdb_objects SET
 			name=COALESCE(NULLIF($2,''),name), site=COALESCE(NULLIF($3,''),site),
 			fqdn=COALESCE(NULLIF($4,''),fqdn), ip=COALESCE(NULLIF($5,''),ip),
@@ -169,7 +171,7 @@ func (server *Server) updateEquipment(response http.ResponseWriter, request *htt
 		return
 	}
 
-	err = changelog.Record(request.Context(), tx, changelog.Event{
+	err = changelog.Record(ctx, tx, changelog.Event{
 		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "cmdb_object.update",
 		ResourceType: "cmdb_object", ResourceID: objectID,
 		Before: map[string]any{
@@ -183,7 +185,7 @@ func (server *Server) updateEquipment(response http.ResponseWriter, request *htt
 			"install_date": nullableDate(resultInstallDate), "spec_json": nullableString(specJSON),
 		},
 	})
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}

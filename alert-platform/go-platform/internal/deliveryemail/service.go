@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"html"
 	"log"
@@ -150,7 +151,7 @@ func (service *Service) deliverOne(ctx context.Context, id int64) error {
 		FROM delivery_outbox WHERE id=$1 AND status='processing'`, id,
 	).Scan(&command.id, &command.notificationID, &command.recipient, &subject, &bodyHTML, &command.text, &command.attempts, &replyTo)
 	if err != nil {
-		if err == pgx.ErrNoRows {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
 		return err
@@ -214,11 +215,11 @@ func (service *Service) send(command outboxCommand) error {
 
 func buildMessage(from, to, subject, body, contentType string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("From: %s\r\n", from))
-	b.WriteString(fmt.Sprintf("To: %s\r\n", to))
-	b.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
+	_, _ = fmt.Fprintf(&b, "From: %s\r\n", from)
+	_, _ = fmt.Fprintf(&b, "To: %s\r\n", to)
+	_, _ = fmt.Fprintf(&b, "Subject: %s\r\n", subject)
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString(fmt.Sprintf("Content-Type: %s; charset=UTF-8\r\n\r\n", contentType))
+	_, _ = fmt.Fprintf(&b, "Content-Type: %s; charset=UTF-8\r\n\r\n", contentType)
 	b.WriteString(body)
 	return b.String()
 }
@@ -270,7 +271,7 @@ func (service *Service) buildTrackedHTML(ctx context.Context, command outboxComm
 	var body strings.Builder
 	body.WriteString("<!doctype html><html><body style=\"font-family:sans-serif;white-space:pre-wrap\">")
 	body.WriteString(html.EscapeString(text))
-	body.WriteString(fmt.Sprintf(`<img src="%s" width="1" height="1" alt="" style="display:none">`, html.EscapeString(openPixel)))
+	_, _ = fmt.Fprintf(&body, `<img src="%s" width="1" height="1" alt="" style="display:none">`, html.EscapeString(openPixel))
 	body.WriteString("</body></html>")
 	return body.String(), nil
 }

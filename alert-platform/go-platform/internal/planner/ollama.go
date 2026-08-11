@@ -45,7 +45,7 @@ func (client *OllamaClient) Embed(ctx context.Context, text string) []float32 {
 	if err != nil {
 		return nil
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil
 	}
@@ -73,7 +73,7 @@ func (client *OllamaClient) Reachable(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	return response.StatusCode >= 200 && response.StatusCode < 300
 }
 
@@ -96,7 +96,7 @@ func (client *OllamaClient) RunningModels(ctx context.Context) ([]RunningModel, 
 	if err != nil {
 		return nil, err
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil, fmt.Errorf("ollama /api/ps returned %d", response.StatusCode)
 	}
@@ -138,7 +138,7 @@ func (client *OllamaClient) Ask(ctx context.Context, prompt string, numPredict i
 	if err != nil {
 		return nil
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		return nil
 	}

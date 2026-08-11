@@ -153,26 +153,27 @@ func (server *Server) createGroup(response http.ResponseWriter, request *http.Re
 	}
 	actor, _ := user["username"].(string)
 	now := time.Now().UTC()
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	var id int64
 	name := strings.TrimSpace(*payload.Name)
-	err = tx.QueryRow(request.Context(), `INSERT INTO groups(name,description,created_at) VALUES($1,$2,$3) RETURNING id`, name, payload.Description, now).Scan(&id)
+	err = tx.QueryRow(ctx, `INSERT INTO groups(name,description,created_at) VALUES($1,$2,$3) RETURNING id`, name, payload.Description, now).Scan(&id)
 	if err == nil {
-		_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'create_group',$2,$3)`, actor, name, now)
+		_, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'create_group',$2,$3)`, actor, name, now)
 	}
 	if err == nil {
-		err = changelog.Record(request.Context(), tx, changelog.Event{
+		err = changelog.Record(ctx, tx, changelog.Event{
 			OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "group.create",
 			ResourceType: "group", ResourceID: strconv.FormatInt(id, 10),
 			After: map[string]any{"name": name, "description": payload.Description},
 		})
 	}
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}

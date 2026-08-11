@@ -61,21 +61,21 @@ func TestAllPythonGoldenFixtures(t *testing.T) {
 			line++
 			var fixture parserFixture
 			if err := json.Unmarshal(scanner.Bytes(), &fixture); err != nil {
-				file.Close()
+				_ = file.Close()
 				t.Fatalf("%s:%d: %v", path, line, err)
 			}
 			result := Parse(connectors[system], fixture.RawBody, fixture.SourceInstance, time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC), &site)
 			if !result.Success {
-				file.Close()
+				_ = file.Close()
 				t.Fatalf("%s:%d: %s", path, line, result.Error)
 			}
 			if result.Event.State != fixture.Expected.State || result.Event.SymptomClass != fixture.Expected.SymptomClass || value(result.Event.Component) != value(fixture.Expected.Component) {
-				file.Close()
+				_ = file.Close()
 				t.Fatalf("%s:%d: unexpected event %#v", path, line, result.Event)
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			file.Close()
+			_ = file.Close()
 			t.Fatal(err)
 		}
 		if err := file.Close(); err != nil {

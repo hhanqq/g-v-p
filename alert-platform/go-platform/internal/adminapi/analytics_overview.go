@@ -12,60 +12,101 @@ import (
 // уже существующим Signal/Event/Problem/Incident/Notification —
 // ничего не подавляется и не удаляется, раздел «Снижение шума» это
 // прямо описывает словами "объединено", не "потеряно" (раздел VIII.36 ТЗ).
-func (server *Server) analyticsOverview(response http.ResponseWriter, request *http.Request, _ map[string]any) {
-	ctx := request.Context()
-	rng := parseAnalyticsRange(request)
-	site := siteFilter(request)
+// noiseFunnel — раздел «Снижение шума»: сырые события → уникальные
+// проблемы (после дедупликации) → инциденты → отправленные уведомления.
+type noiseFunnel struct {
+	rawEvents, problemsTotal, problemsDeduped, incidentsTotal, notificationsSent int
+}
 
+func (server *Server) loadNoiseFunnel(ctx context.Context, rng analyticsRange, site string) (noiseFunnel, error) {
 	siteWhere, siteArgs := "", []any{}
 	if site != "" {
 		siteWhere = " AND object.site = $3"
 		siteArgs = []any{site}
 	}
+	args := append([]any{rng.From, rng.To}, siteArgs...)
 
-	var rawEvents, problemsTotal, problemsDeduped, incidentsTotal, notificationsSent int
-	err := server.pool.QueryRow(ctx, `
+	var funnel noiseFunnel
+	if err := server.pool.QueryRow(ctx, `
 		SELECT count(*) FROM events event
 		LEFT JOIN cmdb_objects object ON object.id = event.object_id
-		WHERE event.occurred_at >= $1 AND event.occurred_at < $2`+siteWhere,
-		append([]any{rng.From, rng.To}, siteArgs...)...,
-	).Scan(&rawEvents)
-	if err != nil {
-		writeError(response, http.StatusServiceUnavailable, "database unavailable")
-		return
+		WHERE event.occurred_at >= $1 AND event.occurred_at < $2`+siteWhere, args...,
+	).Scan(&funnel.rawEvents); err != nil {
+		return noiseFunnel{}, err
 	}
-	err = server.pool.QueryRow(ctx, `
+	if err := server.pool.QueryRow(ctx, `
 		SELECT count(*), count(*) FILTER (WHERE problem.duplicate_of_problem_id IS NULL)
 		FROM problems problem LEFT JOIN cmdb_objects object ON object.id = problem.object_id
-		WHERE problem.opened_at >= $1 AND problem.opened_at < $2`+siteWhere,
-		append([]any{rng.From, rng.To}, siteArgs...)...,
-	).Scan(&problemsTotal, &problemsDeduped)
-	if err != nil {
-		writeError(response, http.StatusServiceUnavailable, "database unavailable")
-		return
+		WHERE problem.opened_at >= $1 AND problem.opened_at < $2`+siteWhere, args...,
+	).Scan(&funnel.problemsTotal, &funnel.problemsDeduped); err != nil {
+		return noiseFunnel{}, err
 	}
-	err = server.pool.QueryRow(ctx, `
+	if err := server.pool.QueryRow(ctx, `
 		SELECT count(*) FROM incidents incident
 		JOIN problems root ON root.id = incident.root_problem_id
 		LEFT JOIN cmdb_objects object ON object.id = root.object_id
-		WHERE incident.opened_at >= $1 AND incident.opened_at < $2`+siteWhere,
-		append([]any{rng.From, rng.To}, siteArgs...)...,
-	).Scan(&incidentsTotal)
-	if err != nil {
-		writeError(response, http.StatusServiceUnavailable, "database unavailable")
-		return
+		WHERE incident.opened_at >= $1 AND incident.opened_at < $2`+siteWhere, args...,
+	).Scan(&funnel.incidentsTotal); err != nil {
+		return noiseFunnel{}, err
 	}
-	err = server.pool.QueryRow(ctx, `
+	if err := server.pool.QueryRow(ctx, `
 		SELECT count(*) FROM notifications n
 		JOIN problems problem ON problem.id = n.problem_id
 		LEFT JOIN cmdb_objects object ON object.id = problem.object_id
-		WHERE n.status = 'sent' AND n.created_at >= $1 AND n.created_at < $2`+siteWhere,
-		append([]any{rng.From, rng.To}, siteArgs...)...,
-	).Scan(&notificationsSent)
+		WHERE n.status = 'sent' AND n.created_at >= $1 AND n.created_at < $2`+siteWhere, args...,
+	).Scan(&funnel.notificationsSent); err != nil {
+		return noiseFunnel{}, err
+	}
+	return funnel, nil
+}
+
+func (server *Server) loadAnalyticsDistributions(ctx context.Context, rng analyticsRange) (map[string]int64, []map[string]any, error) {
+	priorities := make(map[string]int64)
+	rows, err := server.pool.Query(ctx, `
+		SELECT priority, count(*) FROM problems
+		WHERE priority IS NOT NULL AND opened_at >= $1 AND opened_at < $2
+		GROUP BY priority`, rng.From, rng.To)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows.Next() {
+		var priority string
+		var count int64
+		_ = rows.Scan(&priority, &count)
+		priorities[priority] = count
+	}
+	rows.Close()
+
+	sources := make([]map[string]any, 0)
+	rows, err = server.pool.Query(ctx, `
+		SELECT s.source_system, count(*) FROM events e JOIN signals s ON s.id = e.signal_id
+		WHERE e.occurred_at >= $1 AND e.occurred_at < $2
+		GROUP BY s.source_system ORDER BY count(*) DESC`, rng.From, rng.To)
+	if err != nil {
+		return nil, nil, err
+	}
+	for rows.Next() {
+		var system string
+		var count int64
+		_ = rows.Scan(&system, &count)
+		sources = append(sources, map[string]any{"source_system": system, "count": count})
+	}
+	rows.Close()
+	return priorities, sources, nil
+}
+
+func (server *Server) analyticsOverview(response http.ResponseWriter, request *http.Request, _ map[string]any) {
+	ctx := request.Context()
+	rng := parseAnalyticsRange(request)
+	site := siteFilter(request)
+
+	funnel, err := server.loadNoiseFunnel(ctx, rng, site)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
+	rawEvents, problemsTotal, problemsDeduped := funnel.rawEvents, funnel.problemsTotal, funnel.problemsDeduped
+	incidentsTotal, notificationsSent := funnel.incidentsTotal, funnel.notificationsSent
 
 	mtta, err := queryNullableFloat(ctx, server.pool, `
 		SELECT AVG(EXTRACT(EPOCH FROM (acknowledged_at-opened_at))) FROM problems
@@ -107,39 +148,11 @@ func (server *Server) analyticsOverview(response http.ResponseWriter, request *h
 		noiseReduction = &value
 	}
 
-	priorities := make(map[string]int64)
-	rows, err := server.pool.Query(ctx, `
-		SELECT priority, count(*) FROM problems
-		WHERE priority IS NOT NULL AND opened_at >= $1 AND opened_at < $2
-		GROUP BY priority`, rng.From, rng.To)
+	priorities, sources, err := server.loadAnalyticsDistributions(ctx, rng)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	for rows.Next() {
-		var priority string
-		var count int64
-		_ = rows.Scan(&priority, &count)
-		priorities[priority] = count
-	}
-	rows.Close()
-
-	sources := make([]map[string]any, 0)
-	rows, err = server.pool.Query(ctx, `
-		SELECT s.source_system, count(*) FROM events e JOIN signals s ON s.id = e.signal_id
-		WHERE e.occurred_at >= $1 AND e.occurred_at < $2
-		GROUP BY s.source_system ORDER BY count(*) DESC`, rng.From, rng.To)
-	if err != nil {
-		writeError(response, http.StatusServiceUnavailable, "database unavailable")
-		return
-	}
-	for rows.Next() {
-		var system string
-		var count int64
-		_ = rows.Scan(&system, &count)
-		sources = append(sources, map[string]any{"source_system": system, "count": count})
-	}
-	rows.Close()
 
 	writeJSON(response, http.StatusOK, map[string]any{
 		"alerts_total": rawEvents, "incidents_total": incidentsTotal,

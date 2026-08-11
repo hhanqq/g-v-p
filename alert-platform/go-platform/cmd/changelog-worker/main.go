@@ -78,7 +78,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("changelog-worker: connect clickhouse: %v", err)
 	}
-	defer ch.Close()
+	defer func() { _ = ch.Close() }()
 
 	relay := changelog.NewRelay(pool, producer, topic)
 	sink := changelog.NewSink(consumer, ch)

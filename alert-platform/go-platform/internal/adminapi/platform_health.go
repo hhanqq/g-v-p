@@ -188,7 +188,7 @@ func (server *Server) checkGateway(ctx context.Context) componentStatus {
 	if err != nil {
 		return componentStatus{Name: "Gateway", Status: "degraded", Detail: str(err.Error())}
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode != http.StatusOK {
 		return componentStatus{Name: "Gateway", Status: "degraded"}
 	}

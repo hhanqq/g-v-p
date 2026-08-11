@@ -1,6 +1,7 @@
 package availability
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -108,7 +109,7 @@ func TestResolveFromIntervalsInjectsHypotheticalCandidate(t *testing.T) {
 }
 
 func TestResolveDefaultsToAvailableWithNoSubscribers(t *testing.T) {
-	result, err := Resolve(nil, nil, nil, time.Now())
+	result, err := Resolve(context.Background(), nil, nil, time.Now())
 	if err != nil {
 		t.Fatalf("unexpected error for empty subscriber list: %v", err)
 	}

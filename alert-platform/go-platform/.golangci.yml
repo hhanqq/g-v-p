@@ -1,0 +1,77 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    # Correctness / build-breaking
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    # Error handling — раздел 16 доп. ТЗ: не разрешать `value, _ := op()`
+    # без явного объяснения.
+    - errcheck
+    - errorlint
+    # Complexity — раздел 10-11: ориентир warning>10/fail>15 cyclomatic,
+    # функции <=40 строк логики.
+    - gocyclo
+    - funlen
+    # Shadowing, context usage, resource leaks, suspicious constructs
+    - govet
+    - contextcheck
+    - bodyclose
+    - sqlclosecheck
+    - rowserrcheck
+    # Security
+    - gosec
+    # Duplication
+    - dupl
+    # Style/naming (нейтральные, не спорные о форматировании — gofmt
+    # уже покрывает форматирование отдельно)
+    - unconvert
+    - misspell
+
+  settings:
+    gocyclo:
+      min-complexity: 15
+    funlen:
+      lines: 100
+      statements: 60
+    dupl:
+      threshold: 150
+    errcheck:
+      # best-effort записи (audit log, changelog, метрики) намеренно
+      # игнорируют ошибку через `_, _ =` — это осознанный паттерн
+      # проекта (раздел ИИ best-effort), не пропущенная обработка.
+      exclude-functions:
+        - (*database/sql.Rows).Close
+    gosec:
+      excludes:
+        - G404 # math/rand используется только для demo/synthetic данных, не крипто
+        - G706 # log.Printf с внутренними (не HTTP-request) значениями — не log injection от недоверенного ввода
+        - G124 # ложное срабатывание: Secure/HttpOnly/SameSite реально заданы (auth.go), но Secure — через переменную manager.secureCookie, не литерал
+        - G304 # os.ReadFile читает конфиг-директории/пути из ENV при старте процесса, не из HTTP-запроса
+
+  exclusions:
+    generated: lax
+    rules:
+      # Тесты — более короткие функции и повторяющиеся table-driven
+      # блоки ожидаемы и не являются архитектурным запахом.
+      - path: _test\.go
+        linters:
+          - funlen
+          - dupl
+          - gocyclo
+          - gosec
+      # datagen/fixtures — большие декларативные списки, не логика.
+      - path: cmd/kb-index|internal/planner/knowledge_base\.go
+        linters:
+          - funlen
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

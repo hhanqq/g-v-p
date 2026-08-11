@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"path/filepath"
@@ -269,7 +270,7 @@ func (service *Service) applyAIEnrichment(ctx context.Context, tx pgx.Tx, item *
 				}
 				item.DuplicateOfProblemID = &candidateID
 			}
-		} else if err != pgx.ErrNoRows {
+		} else if !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
 	}
@@ -288,7 +289,7 @@ func (service *Service) applyAIEnrichment(ctx context.Context, tx pgx.Tx, item *
 		  AND sibling.status IN ('OPEN','FLAPPING') AND sibling.priority IN ('P0','P1','P2')
 		  AND sibling.opened_at >= $5::timestamp - interval '300 seconds'
 		ORDER BY sibling.opened_at DESC LIMIT 1`, *item.Site, item.ID, item.ObjectID, item.SymptomClass, item.OpenedAt).Scan(&siblingBody)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil
 	}
 	if err != nil {

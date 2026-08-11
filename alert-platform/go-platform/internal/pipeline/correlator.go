@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -30,7 +31,7 @@ func tryCorrelate(ctx context.Context, tx pgx.Tx, trigger *problem) error {
 	if err == nil {
 		return nil
 	}
-	if err != pgx.ErrNoRows {
+	if !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	rows, err := tx.Query(ctx, `
@@ -181,7 +182,7 @@ func loadCMDBObject(ctx context.Context, tx pgx.Tx, objectID *string) (*cmdbObje
 	var object cmdbObject
 	var subnet, parent sql.NullString
 	err := tx.QueryRow(ctx, `SELECT id,subnet,parent_switch_id FROM cmdb_objects WHERE id=$1`, *objectID).Scan(&object.ID, &subnet, &parent)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

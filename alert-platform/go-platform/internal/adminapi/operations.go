@@ -112,12 +112,13 @@ func (server *Server) addSource(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	actor, _ := user["username"].(string)
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	token, err := generateSourceToken()
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "token generation failed")
@@ -125,7 +126,7 @@ func (server *Server) addSource(response http.ResponseWriter, request *http.Requ
 	}
 	now := time.Now().UTC()
 	var id int64
-	err = tx.QueryRow(request.Context(), `INSERT INTO source_instances(instance,system,site,api_token,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id`, payload.Instance, payload.System, payload.Site, token, now).Scan(&id)
+	err = tx.QueryRow(ctx, `INSERT INTO source_instances(instance,system,site,api_token,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id`, payload.Instance, payload.System, payload.Site, token, now).Scan(&id)
 	if err != nil {
 		if strings.Contains(err.Error(), "duplicate key") {
 			writeError(response, http.StatusConflict, "инстанс уже зарегистрирован")
@@ -134,15 +135,15 @@ func (server *Server) addSource(response http.ResponseWriter, request *http.Requ
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	_, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'source_add',$2,$3,$4)`, actor, payload.Instance, "system="+payload.System+" site="+payload.Site, now)
+	_, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'source_add',$2,$3,$4)`, actor, payload.Instance, "system="+payload.System+" site="+payload.Site, now)
 	if err == nil {
-		err = changelog.Record(request.Context(), tx, changelog.Event{
+		err = changelog.Record(ctx, tx, changelog.Event{
 			OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "source_instance.create",
 			ResourceType: "source_instance", ResourceID: strconv.FormatInt(id, 10),
 			After: map[string]any{"instance": payload.Instance, "system": payload.System, "site": payload.Site},
 		})
 	}
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
@@ -173,14 +174,15 @@ func (server *Server) deleteSource(response http.ResponseWriter, request *http.R
 		return
 	}
 	actor, _ := user["username"].(string)
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	var instance string
-	err = tx.QueryRow(request.Context(), `DELETE FROM source_instances WHERE id=$1 RETURNING instance`, id).Scan(&instance)
+	err = tx.QueryRow(ctx, `DELETE FROM source_instances WHERE id=$1 RETURNING instance`, id).Scan(&instance)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(response, http.StatusNotFound, "источник не найден")
 		return
@@ -190,16 +192,16 @@ func (server *Server) deleteSource(response http.ResponseWriter, request *http.R
 		return
 	}
 	now := time.Now().UTC()
-	if _, err = tx.Exec(request.Context(), `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'source_delete',$2,$3)`, actor, instance, now); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO audit_log(actor,action,target,created_at) VALUES($1,'source_delete',$2,$3)`, actor, instance, now); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	err = changelog.Record(request.Context(), tx, changelog.Event{
+	err = changelog.Record(ctx, tx, changelog.Event{
 		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "source_instance.delete",
 		ResourceType: "source_instance", ResourceID: strconv.FormatInt(id, 10),
 		Before: map[string]any{"instance": instance},
 	})
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}

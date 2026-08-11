@@ -77,9 +77,47 @@ Go-сценариями.
   свежий `origin/main`, при необходимости выполни обычный rebase и аккуратно
   перенеси новую Python-логику в соответствующий Go-компонент.
 
+## CODE QUALITY RULES
+
+Перед реализацией любой задачи:
+
+1. Определи слой системы (transport / application / domain / repository /
+   external adapter) — см. `alert-platform/ARCHITECTURE.md`.
+2. Найди существующую реализацию той же ответственности. Не создавай
+   второй механизм там, где можно расширить существующий (пример из
+   этой сессии: единый `FilterNode` AST для панели фильтров и Query
+   Builder — не два параллельных пути фильтрации).
+3. Не помещай business logic (routing, priority, SLA, correlation,
+   availability, permission-вычисление, AI tool execution) в HTTP
+   handler — handler только парсит запрос, проверяет auth/permission,
+   вызывает use case, сериализует ответ.
+4. Не помещай business logic во frontend — frontend адаптирует
+   интерфейс под уже вычисленные backend'ом данные/permissions, не
+   принимает решений сам (см. `internal/adminapi/rbac.go`: permission
+   проверяется на сервере при каждом запросе, а не скрытием кнопки).
+5. Не смешивай DAL и domain — SQL-текст живёт в repository-функциях,
+   не внутри вычислений бизнес-правила.
+6. Не переноси Go business logic обратно в Python. TrueConf-адаптер
+   остаётся тонким vendor-слоем (см. раздел «TrueConf намеренно
+   остаётся на Python» выше) — разбор входящего события можно оставить
+   в Python, само бизнес-правило — только в Go через явный контракт.
+7. Не обходи существующие domain contracts (`DeliveryCommand v1`,
+   `FilterNode`, `rbac.Grant`, `changelog.Event`) — расширяй их, а не
+   создавай параллельные структуры с тем же смыслом.
+8. После изменения запусти quality pipeline (`make check` — быстрый,
+   `make quality` — полный, см. `alert-platform/Makefile`) перед тем,
+   как считать задачу завершённой.
+
+Definition of Done для любого изменения — не «компилируется» и не
+«визуально работает», а: функциональность работает + архитектурные
+границы соблюдены + formatting/lint/static analysis проходят + unit/
+integration/необходимые E2E тесты проходят + build проходит + нет
+необоснованного дублирования + ошибки обработаны (не `_ = err`, кроме
+явно документированных best-effort мест, например AI-обогащения).
+
 ## Проверки перед завершением
 
-Из `alert-platform/`:
+Быстрая проверка (соответствует `make check`) из `alert-platform/`:
 
 ```bash
 python3 -m compileall -q packages services scripts tests
@@ -96,10 +134,44 @@ go test ./...
 go vet ./...
 ```
 
+Полная проверка (`make quality`) дополнительно включает `golangci-lint`,
+ESLint, PostgreSQL integration-тесты на временной БД и migration-тесты —
+см. `alert-platform/Makefile` и `alert-platform/.golangci.yml`. Полный
+набор тяжелее и не обязателен на каждой мелкой правке, но обязателен
+перед тем, как считать крупную фичу или PR завершённой.
+
 Для изменений схемы или planner дополнительно проверь миграции на чистой
 временной PostgreSQL БД и фактические строки `notifications` +
 `delivery_outbox`. Для admin API после сборки проверь LDAP login и основные
 endpoint'ы (`analytics`, `scenarios`, `sla-rules`, `incidents`, `equipment`).
+
+## Известный технический долг (Quality Gate)
+
+`golangci-lint run ./...` из `alert-platform/go-platform/` осознанно не
+доведён до нуля находок. Из 74 первоначальных находок исправлено 53
+(unused, errorlint, errcheck, contextcheck, gosec — все настоящие
+false positives задокументированы прямо в `.golangci.yml` рядом с
+исключением, а не молча подавлены; funlen — 2 функции разбиты на
+подфункции). Осознанно НЕ исправлено:
+
+- **20 находок `gocyclo`** (cyclomatic complexity > 15, до 136 у
+  `(*Server).ServeHTTP` и 56 у `(*Planner).advanceScenario`) — это
+  большие, работающие, уже покрытые тестами функции маршрутизации и
+  бизнес-логики (`ServeHTTP`, `routeScenarios`, `routeGroups`,
+  `advanceScenario`, `scenario.Parse` и т.д.). Рефакторинг ради снятия
+  одной lint-метрики под давлением времени этой итерации создаёт
+  реальный риск регрессии, несоразмерный пользе. Если кто-то берётся
+  за это отдельно — начинать с `ServeHTTP` (разбить на под-роутеры по
+  префиксу пути, часть уже вынесена в `routeGroups`/`routeScenarios`/
+  `routeEmployeeAvailability`) и `advanceScenario` (вынести резолюцию
+  графа и переходы по типам узлов в отдельные функции).
+- **1 находка `staticcheck` QF1003** (`bi_routes.go:167`) — предложение
+  переписать `if/else` на `switch` по одной переменной, чистый стиль
+  без функционального эффекта.
+
+Это состояние, не задача с открытым концом: `make quality` в CI должен
+считать эти 21 находку baseline, а не блокировать сборку — см.
+`alert-platform/.golangci.yml`.
 
 ## Текущее состояние
 

@@ -58,14 +58,15 @@ func (server *Server) createEmployee(response http.ResponseWriter, request *http
 	}
 	actor, _ := user["username"].(string)
 	now := time.Now().UTC()
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 	var id int64
-	err = tx.QueryRow(request.Context(), `
+	err = tx.QueryRow(ctx, `
 		INSERT INTO subscribers(trueconf_username,full_name,phone,email,position,access_token,active,created_at)
 		VALUES($1,$2,$3,$4,$5,$6,true,$7) RETURNING id`,
 		payload.TrueconfUsername, payload.FullName, payload.Phone, payload.Email, payload.Position, token, now,
@@ -78,7 +79,7 @@ func (server *Server) createEmployee(response http.ResponseWriter, request *http
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	err = changelog.Record(request.Context(), tx, changelog.Event{
+	err = changelog.Record(ctx, tx, changelog.Event{
 		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "subscriber.create",
 		ResourceType: "subscriber", ResourceID: strconv.FormatInt(id, 10),
 		After: map[string]any{
@@ -86,7 +87,7 @@ func (server *Server) createEmployee(response http.ResponseWriter, request *http
 			"phone": payload.Phone, "email": payload.Email, "position": payload.Position,
 		},
 	})
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
@@ -122,16 +123,17 @@ func (server *Server) updateEmployee(response http.ResponseWriter, request *http
 	}
 	actor, _ := user["username"].(string)
 	now := time.Now().UTC()
-	tx, err := server.pool.Begin(request.Context())
+	ctx := request.Context()
+	tx, err := server.pool.Begin(ctx)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer func() { _ = tx.Rollback(request.Context()) }()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	var beforeFullName, beforePhone, beforeEmail, beforePosition sql.NullString
 	var beforeActive, beforeTrueconfEnabled, beforeEmailEnabled bool
-	err = tx.QueryRow(request.Context(),
+	err = tx.QueryRow(ctx,
 		`SELECT full_name,phone,email,position,active,trueconf_enabled,email_enabled FROM subscribers WHERE id=$1 FOR UPDATE`, id).
 		Scan(&beforeFullName, &beforePhone, &beforeEmail, &beforePosition, &beforeActive, &beforeTrueconfEnabled, &beforeEmailEnabled)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -157,7 +159,7 @@ func (server *Server) updateEmployee(response http.ResponseWriter, request *http
 
 	var fullName, phone, email, position sql.NullString
 	var resultActive, resultTrueconfEnabled, resultEmailEnabled bool
-	err = tx.QueryRow(request.Context(), `
+	err = tx.QueryRow(ctx, `
 		UPDATE subscribers SET
 			full_name=COALESCE(NULLIF($2,''),full_name), phone=COALESCE(NULLIF($3,''),phone),
 			email=COALESCE(NULLIF($4,''),email), position=COALESCE(NULLIF($5,''),position), active=$6,
@@ -172,7 +174,7 @@ func (server *Server) updateEmployee(response http.ResponseWriter, request *http
 		return
 	}
 
-	err = changelog.Record(request.Context(), tx, changelog.Event{
+	err = changelog.Record(ctx, tx, changelog.Event{
 		OccurredAt: now, Actor: actor, ActorRole: changelog.RoleFromUser(user), Action: "subscriber.update",
 		ResourceType: "subscriber", ResourceID: strconv.FormatInt(id, 10),
 		Before: map[string]any{
@@ -184,7 +186,7 @@ func (server *Server) updateEmployee(response http.ResponseWriter, request *http
 			"email": nullableString(email), "position": nullableString(position), "active": resultActive,
 		},
 	})
-	if err != nil || tx.Commit(request.Context()) != nil {
+	if err != nil || tx.Commit(ctx) != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}

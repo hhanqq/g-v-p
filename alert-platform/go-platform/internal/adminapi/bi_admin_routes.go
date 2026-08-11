@@ -122,7 +122,7 @@ func (server *Server) createBIServiceAccount(response http.ResponseWriter, reque
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var id int64
 	if err := tx.QueryRow(ctx, `
 		INSERT INTO bi_service_accounts(name, token_hash, token_prefix, active, created_by, created_at)
@@ -166,7 +166,7 @@ func (server *Server) revokeBIServiceAccount(response http.ResponseWriter, reque
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	tag, err := tx.Exec(ctx, `UPDATE bi_service_accounts SET active=FALSE WHERE id=$1`, id)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")

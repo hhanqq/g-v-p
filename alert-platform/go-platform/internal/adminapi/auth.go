@@ -48,7 +48,7 @@ func (auth *LDAPAuthenticator) Authenticate(ctx context.Context, username, passw
 	if err != nil {
 		return false, false
 	}
-	defer search.Close()
+	defer func() { _ = search.Close() }()
 	searchDN := fmt.Sprintf("cn=%s,ou=employees,ou=users,%s", auth.SearchUsername, auth.BaseDN)
 	if err := search.Bind(searchDN, auth.SearchPassword); err != nil {
 		return false, false
@@ -67,7 +67,7 @@ func (auth *LDAPAuthenticator) Authenticate(ctx context.Context, username, passw
 	if err != nil {
 		return false, false
 	}
-	defer userConnection.Close()
+	defer func() { _ = userConnection.Close() }()
 	if err := userConnection.Bind(entry.DN, password); err != nil {
 		return false, false
 	}

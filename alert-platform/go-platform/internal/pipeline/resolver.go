@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"context"
+	"errors"
 	"math"
 	"strings"
 
@@ -35,7 +36,7 @@ func resolve(ctx context.Context, tx pgx.Tx, site, rawName, ip *string) (Resolut
 			confidence := 0.9
 			return Resolution{ObjectID: &objectID, Method: "ip", Confidence: &confidence}, nil
 		}
-		if err != pgx.ErrNoRows {
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return Resolution{}, err
 		}
 	}
@@ -69,7 +70,7 @@ func resolve(ctx context.Context, tx pgx.Tx, site, rawName, ip *string) (Resolut
 func aliasLookup(ctx context.Context, tx pgx.Tx, site, rawName string) (string, bool, error) {
 	var objectID string
 	err := tx.QueryRow(ctx, `SELECT object_id FROM cmdb_aliases WHERE site=$1 AND raw_name=$2 LIMIT 1`, site, rawName).Scan(&objectID)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}
 	return objectID, err == nil, err

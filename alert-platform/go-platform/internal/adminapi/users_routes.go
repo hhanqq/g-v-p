@@ -238,7 +238,7 @@ func (server *Server) updatePlatformUser(response http.ResponseWriter, request *
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var targetUsername string
 	if err := tx.QueryRow(ctx, `SELECT username FROM platform_users WHERE id=$1`, id).Scan(&targetUsername); err != nil {
 		writeError(response, http.StatusNotFound, "пользователь не найден")
@@ -308,7 +308,7 @@ func (server *Server) updateUserPermissions(response http.ResponseWriter, reques
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var targetUsername string
 	if err := tx.QueryRow(ctx, `SELECT username FROM platform_users WHERE id=$1`, id).Scan(&targetUsername); err != nil {
 		writeError(response, http.StatusNotFound, "пользователь не найден")
@@ -374,7 +374,7 @@ func (server *Server) updateUserScopes(response http.ResponseWriter, request *ht
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
-	defer tx.Rollback(ctx)
+	defer func() { _ = tx.Rollback(ctx) }()
 	var targetUsername string
 	if err := tx.QueryRow(ctx, `SELECT username FROM platform_users WHERE id=$1`, id).Scan(&targetUsername); err != nil {
 		writeError(response, http.StatusNotFound, "пользователь не найден")

@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -23,7 +24,7 @@ func applyEvent(ctx context.Context, tx pgx.Tx, dedupKey *string, event Event, r
 		return nil, nil
 	}
 	latest, err := loadLatestProblem(ctx, tx, *dedupKey)
-	if err != nil && err != pgx.ErrNoRows {
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return nil, err
 	}
 	action := chooseStateAction(latest, event.State, event.OccurredAt, defaultFlapWindow)

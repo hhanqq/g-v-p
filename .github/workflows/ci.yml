@@ -14,6 +14,73 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  api-docs:
+    name: 📚 API docs · generated Markdown
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: alert-platform/go-platform/go.mod
+          cache-dependency-path: alert-platform/go-platform/go.sum
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Prepare documentation generator
+        working-directory: alert-platform
+        run: npm install --no-save --package-lock=false --ignore-scripts --no-audit --fund=false @scalar/openapi-to-markdown@0.5.36
+
+      - name: Generate API Markdown
+        working-directory: alert-platform
+        run: node scripts/generate-api-docs.mjs
+
+      - name: Verify generated documentation
+        working-directory: alert-platform
+        run: test -s docs/API.md
+
+      - name: Upload generated documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: adp-api-markdown
+          path: alert-platform/docs/API.md
+          if-no-files-found: error
+
+      - name: Publish API page to GitHub Wiki
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        working-directory: alert-platform
+        env:
+          WIKI_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WIKI_URL: https://github.com/${{ github.repository }}.wiki.git
+        run: |
+          set -euo pipefail
+          auth_header="$(printf 'x-access-token:%s' "$WIKI_TOKEN" | base64 -w 0)"
+          wiki_dir="$RUNNER_TEMP/adp-wiki"
+
+          git -c http.extraheader="AUTHORIZATION: basic $auth_header" \
+            clone "$WIKI_URL" "$wiki_dir"
+          cp docs/API.md "$wiki_dir/API.md"
+
+          cd "$wiki_dir"
+          git add API.md
+          if git diff --cached --quiet; then
+            echo "Wiki API page is already current"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "docs: update generated API reference"
+          git -c http.extraheader="AUTHORIZATION: basic $auth_header" push
+
   go:
     name: 🐹 Go · tests + vet
     runs-on: ubuntu-24.04

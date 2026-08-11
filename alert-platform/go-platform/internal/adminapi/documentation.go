@@ -5,7 +5,14 @@ import (
 )
 
 func (server *Server) openapi(response http.ResponseWriter) {
-	writeJSON(response, http.StatusOK, map[string]any{
+	writeJSON(response, http.StatusOK, OpenAPISpec())
+}
+
+// OpenAPISpec returns the same OpenAPI document that is served at
+// /openapi.json. Documentation tooling uses it without starting the API or a
+// database.
+func OpenAPISpec() map[string]any {
+	return map[string]any{
 		"openapi": "3.1.0",
 		"info": map[string]any{
 			"title":   "ADP — Admin API (Go)",
@@ -38,7 +45,7 @@ func (server *Server) openapi(response http.ResponseWriter) {
 			"/api/demo/scenarios":                      map[string]any{"get": operation("List synthetic scenarios")},
 			"/api/trigger/{id}":                        map[string]any{"post": operation("Run synthetic scenario")},
 		},
-	})
+	}
 }
 
 func operation(summary string) map[string]any {

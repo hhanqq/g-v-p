@@ -272,6 +272,7 @@ services:
       SMTP_USERNAME: ${SMTP_USERNAME:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-dispatcher@gpn-dispatcher.local}
+      EMAIL_TRACKING_BASE_URL: ${TRUECONF_PUBLIC_CONSOLE_URL:-http://localhost:8090}
     depends_on:
       migrate:
         condition: service_completed_successfully

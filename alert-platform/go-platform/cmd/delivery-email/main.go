@@ -27,11 +27,12 @@ func main() {
 	defer pool.Close()
 
 	service := deliveryemail.New(pool, deliveryemail.Config{
-		SMTPHost:     required("SMTP_HOST"),
-		SMTPPort:     valueOr("SMTP_PORT", "25"),
-		SMTPUsername: os.Getenv("SMTP_USERNAME"),
-		SMTPPassword: os.Getenv("SMTP_PASSWORD"),
-		FromAddress:  valueOr("SMTP_FROM", "dispatcher@gpn-dispatcher.local"),
+		SMTPHost:        required("SMTP_HOST"),
+		SMTPPort:        valueOr("SMTP_PORT", "25"),
+		SMTPUsername:    os.Getenv("SMTP_USERNAME"),
+		SMTPPassword:    os.Getenv("SMTP_PASSWORD"),
+		FromAddress:     valueOr("SMTP_FROM", "dispatcher@gpn-dispatcher.local"),
+		TrackingBaseURL: os.Getenv("EMAIL_TRACKING_BASE_URL"),
 	})
 
 	log.Printf("delivery-email: started, poll=%s", pollInterval)

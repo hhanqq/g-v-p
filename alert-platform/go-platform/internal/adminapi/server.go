@@ -90,6 +90,14 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.personalAlerts(response, request, path)
 		return
 	}
+	if request.Method == http.MethodGet && strings.HasPrefix(path, "/email-track/open/") {
+		server.emailTrackOpen(response, request, path)
+		return
+	}
+	if request.Method == http.MethodGet && strings.HasPrefix(path, "/email-track/click/") {
+		server.emailTrackClick(response, request, path)
+		return
+	}
 	if server.isDemoRoute(request.Method, path) {
 		server.proxyDemo(response, request, path)
 		return
@@ -124,6 +132,34 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/summary" {
 		server.withAuth(response, request, server.analyticsSummary)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/analytics/overview" {
+		server.withAuth(response, request, server.analyticsOverview)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/analytics/alerts-timeseries" {
+		server.withAuth(response, request, server.analyticsAlertsTimeseries)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/analytics/incidents-timeseries" {
+		server.withAuth(response, request, server.analyticsIncidentsTimeseries)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/analytics/delivery" {
+		server.withAuth(response, request, server.analyticsDelivery)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/analytics/sla" {
+		server.withAuth(response, request, server.analyticsSLA)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/analytics/equipment-top" {
+		server.withAuth(response, request, server.analyticsEquipmentTop)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/analytics/scenarios" {
+		server.withAuth(response, request, server.analyticsScenarios)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/metrics" {

@@ -8,10 +8,14 @@ package deliveryemail
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"fmt"
+	"html"
 	"log"
 	"net/smtp"
+	"regexp"
 	"strings"
 	"time"
 
@@ -28,6 +32,13 @@ type Config struct {
 	BatchSize    int
 	MaxAttempts  int
 	StuckTimeout time.Duration
+	// TrackingBaseURL — публичный домен консоли (например
+	// https://xn--80aebrvrg.xn--p1acf/console), на который указывают
+	// пиксель открытия и click-редиректы в письме. Пусто — tracking
+	// отключён, письмо уходит как plain text без пикселя/подмены ссылок
+	// (честно: без публичного домена получатель не смог бы загрузить
+	// пиксель или пройти по редиректу).
+	TrackingBaseURL string
 }
 
 type Service struct {
@@ -157,6 +168,14 @@ func (service *Service) deliverOne(ctx context.Context, id int64) error {
 		return service.retry(ctx, command, "email recipient is empty")
 	}
 
+	if service.config.TrackingBaseURL != "" {
+		tracked, err := service.buildTrackedHTML(ctx, command)
+		if err != nil {
+			return err
+		}
+		command.bodyHTML = &tracked
+	}
+
 	sendErr := service.send(command)
 	if sendErr != nil {
 		return service.retry(ctx, command, sendErr.Error())
@@ -180,28 +199,92 @@ func (service *Service) send(command outboxCommand) error {
 	if command.subject != nil && *command.subject != "" {
 		subject = *command.subject
 	}
-	body := command.text
+	body, contentType := command.text, "text/plain"
 	if command.bodyHTML != nil && *command.bodyHTML != "" {
-		body = *command.bodyHTML
+		body, contentType = *command.bodyHTML, "text/html"
 	}
 	var auth smtp.Auth
 	if service.config.SMTPUsername != "" {
 		auth = smtp.PlainAuth("", service.config.SMTPUsername, service.config.SMTPPassword, service.config.SMTPHost)
 	}
-	msg := buildMessage(service.config.FromAddress, command.recipient, subject, body)
+	msg := buildMessage(service.config.FromAddress, command.recipient, subject, body, contentType)
 	addr := fmt.Sprintf("%s:%s", service.config.SMTPHost, service.config.SMTPPort)
 	return smtp.SendMail(addr, auth, service.config.FromAddress, []string{command.recipient}, []byte(msg))
 }
 
-func buildMessage(from, to, subject, body string) string {
+func buildMessage(from, to, subject, body, contentType string) string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("From: %s\r\n", from))
 	b.WriteString(fmt.Sprintf("To: %s\r\n", to))
 	b.WriteString(fmt.Sprintf("Subject: %s\r\n", subject))
 	b.WriteString("MIME-Version: 1.0\r\n")
-	b.WriteString("Content-Type: text/plain; charset=UTF-8\r\n\r\n")
+	b.WriteString(fmt.Sprintf("Content-Type: %s; charset=UTF-8\r\n\r\n", contentType))
 	b.WriteString(body)
 	return b.String()
+}
+
+var urlPattern = regexp.MustCompile(`https?://[^\s<>"]+`)
+
+func randomToken() (string, error) {
+	raw := make([]byte, 24)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+// buildTrackedHTML — раздел VI.25-26 ТЗ: open-пиксель + click-редирект
+// через собственный подписанный токен, НЕ через destination в query
+// (иначе open redirect). target_url для click хранится здесь, на
+// сервере, в момент отправки — сам redirect-эндпоинт (admin-console)
+// никогда не читает URL из запроса пользователя.
+func (service *Service) buildTrackedHTML(ctx context.Context, command outboxCommand) (string, error) {
+	text := command.text
+	for _, rawURL := range uniqueStrings(urlPattern.FindAllString(text, -1)) {
+		token, err := randomToken()
+		if err != nil {
+			return "", err
+		}
+		if _, err := service.pool.Exec(ctx, `
+			INSERT INTO email_tracking_links(notification_id, kind, token, target_url, created_at)
+			VALUES ($1, 'click', $2, $3, $4)`,
+			command.notificationID, token, rawURL, time.Now().UTC()); err != nil {
+			return "", err
+		}
+		clickURL := strings.TrimRight(service.config.TrackingBaseURL, "/") + "/email-track/click/" + token
+		text = strings.ReplaceAll(text, rawURL, clickURL)
+	}
+
+	openToken, err := randomToken()
+	if err != nil {
+		return "", err
+	}
+	if _, err := service.pool.Exec(ctx, `
+		INSERT INTO email_tracking_links(notification_id, kind, token, created_at)
+		VALUES ($1, 'open', $2, $3)`,
+		command.notificationID, openToken, time.Now().UTC()); err != nil {
+		return "", err
+	}
+	openPixel := strings.TrimRight(service.config.TrackingBaseURL, "/") + "/email-track/open/" + openToken
+
+	var body strings.Builder
+	body.WriteString("<!doctype html><html><body style=\"font-family:sans-serif;white-space:pre-wrap\">")
+	body.WriteString(html.EscapeString(text))
+	body.WriteString(fmt.Sprintf(`<img src="%s" width="1" height="1" alt="" style="display:none">`, html.EscapeString(openPixel)))
+	body.WriteString("</body></html>")
+	return body.String(), nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		if !seen[v] {
+			seen[v] = true
+			result = append(result, v)
+		}
+	}
+	return result
 }
 
 // retry — то же экспоненциальное окно, что и в outbox.py::_retry

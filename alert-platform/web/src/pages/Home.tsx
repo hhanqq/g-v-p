@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, HomeOverview } from "../api";
 import { Card, PageHeader, StatTile } from "../components/ui";
@@ -18,22 +18,43 @@ const NEEDS_ATTENTION_ICON: Record<string, string> = {
   delivery_backlog: "Доставка",
 };
 
+// Селектор периода графика «Алерты» (раздел «Главная» доп. ТЗ): гранулярность
+// бакетов считает бэкенд по факту длительности периода (parseHomePeriod/
+// bucketPlan в go-platform), фронтенд только выбирает from/to и отражает
+// выбор в URL — тысячи сырых точек в браузер не попадают ни при каком period.
+const PERIOD_TABS = [
+  { label: "24ч", value: "24h" },
+  { label: "7д", value: "7d" },
+  { label: "30д", value: "30d" },
+] as const;
+
 export default function Home() {
+  const [params, setParams] = useSearchParams();
+  const period = params.get("period") ?? "24h";
+  const customFrom = params.get("from") ?? "";
+  const customTo = params.get("to") ?? "";
+
+  const query = new URLSearchParams({ period });
+  if (period === "custom") {
+    if (customFrom) query.set("from", new Date(customFrom).toISOString());
+    if (customTo) query.set("to", new Date(customTo).toISOString());
+  }
+
   const { data, isLoading } = useQuery<HomeOverview>({
-    queryKey: ["home-overview"],
-    queryFn: () => api.get<HomeOverview>("/home/overview"),
+    queryKey: ["home-overview", period, customFrom, customTo],
+    queryFn: () => api.get<HomeOverview>(`/home/overview?${query.toString()}`),
     refetchInterval: 30000,
   });
 
   const chartData = useMemo(() => {
     if (!data) return [];
-    const byHour = new Map<string, Record<string, number | string>>();
-    for (const point of data.alerts_24h) {
-      if (!byHour.has(point.hour)) byHour.set(point.hour, { hour: point.hour, P0: 0, P1: 0, P2: 0, P3: 0 });
-      const row = byHour.get(point.hour)!;
+    const byBucket = new Map<string, Record<string, number | string>>();
+    for (const point of data.alerts_series) {
+      if (!byBucket.has(point.bucket)) byBucket.set(point.bucket, { bucket: point.bucket, P0: 0, P1: 0, P2: 0, P3: 0 });
+      const row = byBucket.get(point.bucket)!;
       if (point.priority in PRIORITY_COLOR) row[point.priority] = point.count;
     }
-    return Array.from(byHour.values());
+    return Array.from(byBucket.values());
   }, [data]);
 
   if (isLoading || !data) {
@@ -52,14 +73,56 @@ export default function Home() {
       </div>
 
       <Card className="mt-4">
-        <h3 className="mb-3 text-sm font-semibold">Алерты за последние 24 часа</h3>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold">Алерты за период</h3>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex gap-1">
+              {PERIOD_TABS.map((tab) => (
+                <button
+                  key={tab.value}
+                  onClick={() => setParams({ period: tab.value })}
+                  className={`rounded-md px-2.5 py-1 text-xs ${
+                    period === tab.value ? "bg-accent text-white" : "bg-bg text-muted hover:text-fg"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              ))}
+              <button
+                onClick={() => setParams({ period: "custom", from: customFrom, to: customTo })}
+                className={`rounded-md px-2.5 py-1 text-xs ${
+                  period === "custom" ? "bg-accent text-white" : "bg-bg text-muted hover:text-fg"
+                }`}
+              >
+                Произвольный
+              </button>
+            </div>
+            {period === "custom" && (
+              <div className="flex items-center gap-1.5 text-xs">
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(e) => setParams({ period: "custom", from: e.target.value, to: customTo })}
+                  className="rounded-md border border-border bg-bg px-2 py-1"
+                />
+                <span className="text-muted">—</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(e) => setParams({ period: "custom", from: customFrom, to: e.target.value })}
+                  className="rounded-md border border-border bg-bg px-2 py-1"
+                />
+              </div>
+            )}
+          </div>
+        </div>
         {chartData.length === 0 ? (
-          <div className="py-8 text-center text-sm text-muted">Событий за последние 24 часа нет</div>
+          <div className="py-8 text-center text-sm text-muted">Событий за выбранный период нет</div>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.2} />
-              <XAxis dataKey="hour" tick={{ fontSize: 11 }} />
+              <XAxis dataKey="bucket" tick={{ fontSize: 11 }} />
               <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
               <Tooltip />
               <Legend wrapperStyle={{ fontSize: 11 }} />

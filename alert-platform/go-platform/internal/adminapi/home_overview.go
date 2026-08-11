@@ -34,7 +34,8 @@ func (server *Server) homeOverview(response http.ResponseWriter, request *http.R
 		return
 	}
 
-	alertsSeries, err := server.alerts24hByPriority(ctx, now)
+	periodFrom, periodTo := parseHomePeriod(request, now)
+	alertsSeries, granularity, err := server.alertsSeriesByPriority(ctx, periodFrom, periodTo)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
@@ -91,7 +92,10 @@ func (server *Server) homeOverview(response http.ResponseWriter, request *http.R
 			"open_incidents": openIncidents, "critical_active": criticalActive,
 			"no_reaction": noReaction, "sla_breaches_today": slaBreachesToday,
 		},
-		"alerts_24h":      alertsSeries,
+		"alerts_series": alertsSeries,
+		"alerts_period": map[string]any{
+			"from": formatISO(periodFrom), "to": formatISO(periodTo), "granularity": granularity,
+		},
 		"needs_attention": needsAttention,
 		"adp_health":      components,
 		"resources":       resources,
@@ -100,29 +104,76 @@ func (server *Server) homeOverview(response http.ResponseWriter, request *http.R
 	})
 }
 
-func (server *Server) alerts24hByPriority(ctx context.Context, now time.Time) ([]map[string]any, error) {
+// parseHomePeriod — раздел «Главная» доп. ТЗ: селектор периода
+// (24ч/7д/30д/произвольный), период отражается в URL самим фронтендом
+// (?period=7d или ?period=custom&from=...&to=...). Отсутствие/нераспознанный
+// period — прежнее поведение по умолчанию (последние 24 часа).
+func parseHomePeriod(request *http.Request, now time.Time) (from, to time.Time) {
+	to = now
+	switch request.URL.Query().Get("period") {
+	case "7d":
+		from = now.Add(-7 * 24 * time.Hour)
+	case "30d":
+		from = now.Add(-30 * 24 * time.Hour)
+	case "custom":
+		from = now.Add(-24 * time.Hour)
+		if parsed, err := time.Parse(time.RFC3339, request.URL.Query().Get("from")); err == nil {
+			from = parsed.UTC()
+		}
+		if parsed, err := time.Parse(time.RFC3339, request.URL.Query().Get("to")); err == nil {
+			to = parsed.UTC()
+		}
+	default:
+		from = now.Add(-24 * time.Hour)
+	}
+	if !to.After(from) {
+		return now.Add(-24 * time.Hour), now
+	}
+	return from, to
+}
+
+// bucketPlan — раздел «Главная» доп. ТЗ: гранулярность бакетов считает
+// бэкенд по фактической длительности периода, не фронтенд по фиксированным
+// вариантам — работает и для произвольного custom-диапазона, а не только
+// для 24ч/7д/30д. Цель явно сформулирована в ТЗ: браузер не должен получать
+// тысячи сырых точек.
+func bucketPlan(duration time.Duration) (interval, format, granularity string) {
+	switch {
+	case duration <= 48*time.Hour:
+		return "1 hour", "HH24:MI", "hour"
+	case duration <= 14*24*time.Hour:
+		return "6 hours", "DD.MM HH24:MI", "6h"
+	case duration <= 45*24*time.Hour:
+		return "1 day", "DD.MM", "day"
+	default:
+		return "7 days", "DD.MM", "week"
+	}
+}
+
+func (server *Server) alertsSeriesByPriority(ctx context.Context, from, to time.Time) ([]map[string]any, string, error) {
+	interval, format, granularity := bucketPlan(to.Sub(from))
 	rows, err := server.pool.Query(ctx, `
-		SELECT TO_CHAR(bucket,'HH24:MI'), COALESCE(problem.priority,'—'), count(*)
-		FROM GENERATE_SERIES($1::timestamp, $2::timestamp, INTERVAL '1 hour') bucket
-		JOIN events event ON event.occurred_at >= bucket AND event.occurred_at < bucket + INTERVAL '1 hour'
+		SELECT TO_CHAR(bucket, $4), COALESCE(problem.priority,'—'), count(*)
+		FROM GENERATE_SERIES($1::timestamp, $2::timestamp, $3::interval) bucket
+		JOIN events event ON event.occurred_at >= bucket AND event.occurred_at < bucket + $3::interval
 		LEFT JOIN problems problem ON problem.id = event.problem_id
 		GROUP BY bucket, problem.priority ORDER BY bucket`,
-		now.Add(-24*time.Hour), now,
+		from, to, interval, format,
 	)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	defer rows.Close()
 	out := make([]map[string]any, 0)
 	for rows.Next() {
-		var hour, priority string
+		var bucket, priority string
 		var count int64
-		if err := rows.Scan(&hour, &priority, &count); err != nil {
-			return nil, err
+		if err := rows.Scan(&bucket, &priority, &count); err != nil {
+			return nil, "", err
 		}
-		out = append(out, map[string]any{"hour": hour, "priority": priority, "count": count})
+		out = append(out, map[string]any{"bucket": bucket, "priority": priority, "count": count})
 	}
-	return out, rows.Err()
+	return out, granularity, rows.Err()
 }
 
 // needsAttention — раздел 23: самый практически полезный блок Главной.

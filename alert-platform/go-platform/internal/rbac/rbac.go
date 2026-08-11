@@ -37,6 +37,13 @@ const (
 	AuditRead          Permission = "audit.read"
 	PlatformHealthRead Permission = "platform_health.read"
 	HelpRead           Permission = "help.read"
+	// AIUse/AIAuditRead/AIExecuteWrite — раздел «ADP AI» доп. ТЗ. AIExecuteWrite
+	// НЕ обходит доменные разрешения — запись через ИИ (например, правку SLA)
+	// нужно проверять и по этому праву, и по доменному (SLAManage) одновременно;
+	// это гарантирует Effective(), а не сам факт наличия AIExecuteWrite.
+	AIUse          Permission = "ai.use"
+	AIAuditRead    Permission = "ai.audit.read"
+	AIExecuteWrite Permission = "ai.execute.write"
 )
 
 // AllPermissions — порядок фиксирован для стабильного отображения в
@@ -58,6 +65,7 @@ var AllPermissions = []Permission{
 	AuditRead,
 	PlatformHealthRead,
 	HelpRead,
+	AIUse, AIAuditRead, AIExecuteWrite,
 }
 
 var PermissionLabels = map[Permission]string{
@@ -90,6 +98,9 @@ var PermissionLabels = map[Permission]string{
 	AuditRead:          "Аудит / история изменений",
 	PlatformHealthRead: "Состояние системы",
 	HelpRead:           "Справка",
+	AIUse:              "ADP AI — использование",
+	AIAuditRead:        "ADP AI — журнал (аудит действий ИИ)",
+	AIExecuteWrite:     "ADP AI — выполнение write-действий (доп. к доменному праву)",
 }
 
 type Role string

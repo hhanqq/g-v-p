@@ -86,7 +86,8 @@ export interface PlatformUserDetail {
 
 export interface HomeOverview {
   kpis: { open_incidents: number; critical_active: number; no_reaction: number; sla_breaches_today: number };
-  alerts_24h: { hour: string; priority: string; count: number }[];
+  alerts_series: { bucket: string; priority: string; count: number }[];
+  alerts_period: { from: string; to: string; granularity: "hour" | "6h" | "day" | "week" };
   needs_attention: { kind: string; text: string; detail: string; priority?: string | null; incident_id?: number; problem_id?: number }[];
   adp_health: ComponentStatus[];
   resources: {

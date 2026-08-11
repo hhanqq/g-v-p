@@ -5,10 +5,9 @@ datagen/out/*.jsonl
 .env
 .pytest_cache/
 .DS_Store
+node_modules/
 web/node_modules/
 web/dist/
 web/*.tsbuildinfo
 web/vite.config.js
 web/vite.config.d.ts
-
-

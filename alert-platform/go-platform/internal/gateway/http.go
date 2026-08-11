@@ -114,7 +114,14 @@ func withRecovery(next http.Handler) http.Handler {
 
 func (h *HTTPHandler) openapi(response http.ResponseWriter, _ *http.Request) {
 	response.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_, _ = response.Write([]byte(openAPISpec))
+	_, _ = response.Write(OpenAPISpec())
+}
+
+// OpenAPISpec returns the same OpenAPI document that is served at
+// /openapi.json. Documentation tooling uses it without starting the gateway or
+// a database.
+func OpenAPISpec() []byte {
+	return []byte(openAPISpec)
 }
 
 func (h *HTTPHandler) docs(response http.ResponseWriter, _ *http.Request) {

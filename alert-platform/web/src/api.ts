@@ -399,6 +399,27 @@ export interface GroupDetail {
   equipment_scope: GroupEquipmentScope[];
 }
 
+export interface OrgTreeEmployee {
+  id: number;
+  full_name: string;
+  trueconf_username: string;
+  position: string | null;
+  active: boolean;
+  available: boolean;
+  availability_kind: string;
+  active_alerts: number;
+}
+
+export interface OrgTreeNode {
+  id: number;
+  name: string;
+  kind: string;
+  headcount: number;
+  availability: Record<string, number>;
+  employees: OrgTreeEmployee[];
+  children: OrgTreeNode[];
+}
+
 export interface EmployeeListItem {
   id: number;
   trueconf_username: string;

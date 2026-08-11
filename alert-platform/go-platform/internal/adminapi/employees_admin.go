@@ -103,6 +103,9 @@ type employeeUpdateRequest struct {
 	Competencies    *string `json:"competencies"`
 	TrueconfEnabled *bool   `json:"trueconf_enabled"`
 	EmailEnabled    *bool   `json:"email_enabled"`
+	// OrgUnitID — раздел «Сотрудники»: место в дереве организации
+	// (org_units). nil — не менять, тот же принцип, что у остальных полей.
+	OrgUnitID *int64 `json:"org_unit_id"`
 }
 
 // updateEmployee — та же конвенция NULLIF-по-пустой-строке, что у
@@ -163,11 +166,13 @@ func (server *Server) updateEmployee(response http.ResponseWriter, request *http
 		UPDATE subscribers SET
 			full_name=COALESCE(NULLIF($2,''),full_name), phone=COALESCE(NULLIF($3,''),phone),
 			email=COALESCE(NULLIF($4,''),email), position=COALESCE(NULLIF($5,''),position), active=$6,
-			competencies=COALESCE(NULLIF($7,''),competencies), trueconf_enabled=$8, email_enabled=$9
+			competencies=COALESCE(NULLIF($7,''),competencies), trueconf_enabled=$8, email_enabled=$9,
+			org_unit_id=COALESCE($10,org_unit_id)
 		WHERE id=$1
 		RETURNING full_name,phone,email,position,active,trueconf_enabled,email_enabled`,
 		id, valueOrEmpty(payload.FullName), valueOrEmpty(payload.Phone), valueOrEmpty(payload.Email),
 		valueOrEmpty(payload.Position), active, valueOrEmpty(payload.Competencies), trueconfEnabled, emailEnabled,
+		payload.OrgUnitID,
 	).Scan(&fullName, &phone, &email, &position, &resultActive, &resultTrueconfEnabled, &resultEmailEnabled)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")

@@ -6,12 +6,22 @@
 делегирование), дающие сценариям реальные разные ветки на разных людях
 прямо после сидирования — не только "все всегда доступны".
 
+Также строит дерево организации (org_units, раздел «Сотрудники» доп. ТЗ:
+дерево вместо плоской карточной сетки) над теми же реальными данными —
+не выдуманная отдельная таксономия, а два представления (группы для
+маршрутизации, дерево для навигации) над одним и тем же составом
+филиалов/ролей: Организация → Филиал → Отдел (АСУ ТП/Сеть/Серверы) →
+Сотрудник для инженеров (4 уровня) и Организация → Руководство →
+Сотрудник для руководителей (2 уровня) — глубина не одинаковая
+специально, чтобы дерево не выглядело как решение с фиксированным
+числом уровней.
+
 Через реальный Go admin API (как и seed_scenario_templates.py) — не
-миграцию: сотрудники и группы это данные, не схема. Идемпотентен:
-пропускает сотрудника/группу, если trueconf_username/название уже есть.
-LDAP-аккаунты (тот же trueconf_username) — ldap/glauth.cfg, заведены
-отдельно и заранее: без них deprovision-worker деактивировал бы этих
-сотрудников на первой сверке (см. комментарий там же).
+миграцию: сотрудники, группы и org_units это данные, не схема. Идемпотентен:
+пропускает сотрудника/группу/org_unit, если trueconf_username/название
+уже есть. LDAP-аккаунты (тот же trueconf_username) — ldap/glauth.cfg,
+заведены отдельно и заранее: без них deprovision-worker деактивировал бы
+этих сотрудников на первой сверке (см. комментарий там же).
 
 Пример:
     python3 scripts/seed_employees.py \
@@ -109,6 +119,50 @@ def ensure_employee(client: httpx.Client, username: str, full_name: str, positio
     return employee_id
 
 
+ORG_ROOT_NAME = "ПАО «Газпромнефть» — Блок разведки и добычи"
+LEADERSHIP_UNIT_NAME = "Руководство эксплуатации"
+
+
+def get_org_tree(client: httpx.Client) -> list[dict]:
+    return client.get("/api/org-units/tree").raise_for_status().json()
+
+
+def ensure_org_unit(client: httpx.Client, name: str, parent: dict | None, kind: str) -> dict:
+    """parent — узел дерева (с "children"), либо None для корня. Мутирует
+    parent["children"] на месте, чтобы повторные вызовы в этом же запуске
+    сразу видели только что созданный узел без повторного GET дерева."""
+    siblings = parent["children"] if parent is not None else get_org_tree(client)
+    existing = next((n for n in siblings if n["name"] == name), None)
+    if existing is not None:
+        return existing
+    payload: dict = {"name": name, "kind": kind}
+    if parent is not None:
+        payload["parent_id"] = parent["id"]
+    created = client.post("/api/org-units", json=payload)
+    created.raise_for_status()
+    node = {"id": created.json()["id"], "name": name, "kind": kind, "children": [], "employees": []}
+    siblings.append(node)
+    print(f"org_unit создан: {name} (id={node['id']})")
+    return node
+
+
+def ensure_org_structure(client: httpx.Client) -> tuple[dict[str, dict[str, dict]], dict]:
+    root = ensure_org_unit(client, ORG_ROOT_NAME, None, "organization")
+    site_departments: dict[str, dict[str, dict]] = {}
+    for site, site_label in SITES.items():
+        site_node = ensure_org_unit(client, site_label, root, "филиал")
+        site_departments[site] = {
+            category: ensure_org_unit(client, label, site_node, "отдел")
+            for category, label in CATEGORY_LABEL.items()
+        }
+    leadership_node = ensure_org_unit(client, LEADERSHIP_UNIT_NAME, root, "отдел")
+    return site_departments, leadership_node
+
+
+def set_org_unit(client: httpx.Client, employee_id: int, org_unit_id: int) -> None:
+    client.put(f"/api/employees/{employee_id}", json={"org_unit_id": org_unit_id}).raise_for_status()
+
+
 def ensure_group(client: httpx.Client, name: str) -> tuple[int, bool]:
     groups = client.get("/api/groups").raise_for_status().json()
     existing = next((g for g in groups if g["name"] == name), None)
@@ -131,6 +185,7 @@ def main() -> None:
 
         usernames_to_id: dict[str, int] = {}
         site_group_id: dict[str, int] = {}
+        site_departments, leadership_unit = ensure_org_structure(client)
 
         for site, site_label in SITES.items():
             group_id, created = ensure_group(client, f"{site_label} — дежурные")
@@ -145,6 +200,7 @@ def main() -> None:
             members = client.get(f"/api/groups/{site_group_id[site]}").raise_for_status().json()["members"]
             if not any(m["subscriber_id"] == employee_id for m in members):
                 client.post(f"/api/groups/{site_group_id[site]}/members", json={"subscriber_id": employee_id}).raise_for_status()
+            set_org_unit(client, employee_id, site_departments[site][category]["id"])
 
         for username, full_name, position, competencies, covered_sites in MANAGERS:
             employee_id = ensure_employee(client, username, full_name, position, competencies, True)
@@ -159,6 +215,7 @@ def main() -> None:
                 members = client.get(f"/api/groups/{group_id}").raise_for_status().json()["members"]
             if not any(m["subscriber_id"] == employee_id for m in members):
                 client.post(f"/api/groups/{group_id}/members", json={"subscriber_id": employee_id}).raise_for_status()
+            set_org_unit(client, employee_id, leadership_unit["id"])
 
         now = datetime.utcnow()
         for username, kind, from_offset, until_offset, delegate_username in AVAILABILITY_DEMO:

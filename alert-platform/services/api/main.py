@@ -61,11 +61,15 @@ app = FastAPI(title="Диспетчер — консоль запуска сце
 
 # --- Платформа, Этап 1: новый SPA (план — ~/.claude/plans/cheerful-mixing-pillow.md) ---
 # Сессионная cookie-авторизация — отдельно от HTTP Basic ниже (тот
-# защищает старые server-rendered страницы, не трогаем). SESSION_SECRET
-# без значения по умолчанию в проде был бы дырой; для этого демо-стенда
-# (как и все остальные demo-пароли в проекте) — с явным дефолтом, не
-# скрытым от чтения кода.
-app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET", "dispatcher-demo-secret"))
+# защищает старые server-rendered страницы, не трогаем). Этот процесс
+# не запускается docker-compose (Go admin-console — источник правды для
+# сессий, см. CLAUDE.md), но модуль остаётся для тестов/совместимости.
+# Фолбэк на известную строку "dispatcher-demo-secret" был бы обходом
+# аутентификации, если кто-то всё же поднимет этот процесс без
+# SESSION_SECRET: подписанную cookie с is_admin=True можно подделать,
+# зная дефолт. Случайное значение на процесс сохраняет тот же safe-
+# default принцип, что и packages/common/ldap_auth.py.
+app.add_middleware(SessionMiddleware, secret_key=os.environ.get("SESSION_SECRET") or secrets.token_urlsafe(32))
 app.include_router(app_api.router)
 
 if (WEB_DIST_DIR / "assets").exists():

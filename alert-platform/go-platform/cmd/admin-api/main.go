@@ -69,14 +69,23 @@ func main() {
 	if gatewayURL := os.Getenv("GATEWAY_HEALTH_URL"); gatewayURL != "" {
 		handler.UseGatewayHealthURL(gatewayURL)
 	}
+	// LDAP_SEARCH_PASSWORD/SESSION_SECRET — раньше имели хардкоженный
+	// демо-фолбэк ("svc123"/"dispatcher-demo-secret") прямо в исходном
+	// коде: любой новый деплой без явной настройки .env тихо подписывал
+	// бы сессии этим публичным значением (полный auth bypass — известный
+	// секрет подписи куки), либо ходил бы в LDAP известным паролем.
+	// Реальный прод-стенд уже был найден с этим фолбэком живым (раздел
+	// «аудит паролей»), исправлено точечной ротацией .env на машине —
+	// но сам фолбэк в коде оставался и повторил бы проблему на следующем
+	// чистом деплое. required() — явный отказ старта, не тихий дефолт.
 	handler.UseSessions(adminapi.NewSessionManager(
 		adminapi.NewLDAPAuthenticator(
 			valueOr("LDAP_URL", "ldap://ldap:389"),
 			valueOr("LDAP_BASE_DN", "dc=gpn-dispatcher,dc=local"),
 			valueOr("LDAP_SEARCH_USER", "svc-search"),
-			valueOr("LDAP_SEARCH_PASSWORD", "svc123"),
+			required("LDAP_SEARCH_PASSWORD"),
 		),
-		valueOr("SESSION_SECRET", "dispatcher-demo-secret"),
+		required("SESSION_SECRET"),
 		valueOr("SESSION_COOKIE_SECURE", "false") == "true",
 	))
 	server := &http.Server{

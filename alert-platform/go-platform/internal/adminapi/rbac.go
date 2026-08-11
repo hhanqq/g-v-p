@@ -145,9 +145,28 @@ func (server *Server) withPermission(response http.ResponseWriter, request *http
 	server.withAuth(response, request, func(response http.ResponseWriter, request *http.Request, user map[string]any) {
 		grant, _ := user["_grant"].(rbac.Grant)
 		if !grant.Has(permission) {
+			server.auditPermissionDenied(request.Context(), user, permission, request.URL.Path)
 			writeError(response, http.StatusForbidden, "недостаточно прав: "+string(permission))
 			return
 		}
 		next(response, request, user)
 	})
+}
+
+// auditPermissionDenied — раздел «тестер1»/Демо-сценарий доп. ТЗ: отказ
+// в праве обрывается ДО хендлера, который обычно и пишет audit_log —
+// без этого отказ был бы вообще не виден в аудите, только в HTTP-логе.
+// Пишет в тот же audit_log, что и обычные admin-мутации — не отдельный
+// параллельный журнал отказов.
+func (server *Server) auditPermissionDenied(ctx context.Context, user map[string]any, permission rbac.Permission, path string) {
+	if server.pool == nil {
+		return
+	}
+	actor, _ := user["username"].(string)
+	if actor == "" {
+		actor = "?"
+	}
+	_, _ = server.pool.Exec(ctx,
+		`INSERT INTO audit_log(actor,action,target,detail,created_at) VALUES($1,'permission_denied',$2,$3,$4)`,
+		actor, string(permission), path, time.Now().UTC())
 }

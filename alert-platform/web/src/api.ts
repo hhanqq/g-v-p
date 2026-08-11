@@ -119,10 +119,33 @@ export interface AlertItem {
   state: string;
   site: string | null;
   object_id: string | null;
+  equipment_type: string | null;
   resolved: boolean;
   title: string;
   occurred_at: string;
   problem_id: number | null;
+  priority: string | null;
+  status: string | null;
+  acknowledged_at: string | null;
+  incident_id: number | null;
+}
+
+// FilterNode — зеркало Go internal/adminapi.FilterNode: и панель быстрых
+// фильтров, и Query Builder собирают ровно эту структуру, единая точка
+// компиляции в SQL — на backend (см. alert_filter.go).
+export interface FilterNode {
+  match?: "all" | "any";
+  conditions?: FilterNode[];
+  field?: string;
+  op?: string;
+  value?: string | string[] | number | boolean;
+}
+
+export interface AlertFilterOptions {
+  priorities: string[];
+  sources: string[];
+  statuses: { value: string; label: string }[];
+  reactions: { value: string; label: string }[];
 }
 
 export interface EquipmentListItem {

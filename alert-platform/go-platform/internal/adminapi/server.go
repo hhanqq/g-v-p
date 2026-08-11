@@ -178,6 +178,10 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.withAuth(response, request, server.problemRoutingTrace)
 		return
 	}
+	if request.Method == http.MethodGet && path == "/api/alerts/filter-options" {
+		server.withAuth(response, request, server.alertFilterOptions)
+		return
+	}
 	if request.Method == http.MethodGet && path == "/api/alerts" {
 		server.withAuth(response, request, server.listAlerts)
 		return
@@ -565,30 +569,43 @@ func (server *Server) getIncident(response http.ResponseWriter, request *http.Re
 
 func (server *Server) listAlerts(response http.ResponseWriter, request *http.Request, _ map[string]any) {
 	limit, offset := queryInt(request, "limit", 100), queryInt(request, "offset", 0)
+
+	filterNode, err := resolveAlertFilter(request)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	args := make([]any, 0, 8)
+	condition, err := compileFilterNode(filterNode, &args)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
 	where := make([]string, 0, 2)
-	args := make([]any, 0, 4)
-	if source := request.URL.Query().Get("source_system"); source != "" {
-		args = append(args, source)
-		where = append(where, fmt.Sprintf("signal.source_system=$%d", len(args)))
+	if condition != "" {
+		where = append(where, condition)
 	}
-	if symptom := request.URL.Query().Get("symptom_class"); symptom != "" {
-		args = append(args, symptom)
-		where = append(where, fmt.Sprintf("event.symptom_class=$%d", len(args)))
+	if rng := parseOptionalRange(request); rng != nil {
+		args = append(args, rng.From)
+		where = append(where, fmt.Sprintf("event.occurred_at >= $%d", len(args)))
+		args = append(args, rng.To)
+		where = append(where, fmt.Sprintf("event.occurred_at < $%d", len(args)))
 	}
-	from := ` FROM events event JOIN signals signal ON signal.id=event.signal_id`
-	condition := ""
+	condition = ""
 	if len(where) > 0 {
 		condition = " WHERE " + strings.Join(where, " AND ")
 	}
 	var total int64
-	if err := server.pool.QueryRow(request.Context(), `SELECT COUNT(*)`+from+condition, args...).Scan(&total); err != nil {
+	if err := server.pool.QueryRow(request.Context(), `SELECT COUNT(*)`+alertFilterFrom+condition, args...).Scan(&total); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
 	args = append(args, limit, offset)
 	query := `SELECT event.id,event.signal_id,signal.source_system,signal.source_instance,event.symptom_class,
 	                 event.symptom_class_source,event.state,event.site,event.object_id,event.resolved,
-	                 event.title,event.occurred_at,event.problem_id` + from + condition +
+	                 event.title,event.occurred_at,event.problem_id,
+	                 problem.priority,problem.status,problem.acknowledged_at,problem.incident_id,cmdb.equipment_type` +
+		alertFilterFrom + condition +
 		fmt.Sprintf(" ORDER BY event.id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
 	rows, err := server.pool.Query(request.Context(), query, args...)
 	if err != nil {
@@ -600,19 +617,25 @@ func (server *Server) listAlerts(response http.ResponseWriter, request *http.Req
 	for rows.Next() {
 		var id, signalID int64
 		var sourceSystem, sourceInstance, symptomClass, state, title string
-		var symptomSource, site, objectID sql.NullString
+		var symptomSource, site, objectID, priority, status, equipmentType sql.NullString
 		var resolved bool
 		var occurredAt time.Time
-		var problemID sql.NullInt64
-		if err := rows.Scan(&id, &signalID, &sourceSystem, &sourceInstance, &symptomClass, &symptomSource, &state, &site, &objectID, &resolved, &title, &occurredAt, &problemID); err != nil {
+		var problemID, incidentID sql.NullInt64
+		var acknowledgedAt sql.NullTime
+		if err := rows.Scan(&id, &signalID, &sourceSystem, &sourceInstance, &symptomClass, &symptomSource, &state,
+			&site, &objectID, &resolved, &title, &occurredAt, &problemID,
+			&priority, &status, &acknowledgedAt, &incidentID, &equipmentType); err != nil {
 			writeError(response, http.StatusInternalServerError, "scan alerts")
 			return
 		}
 		items = append(items, map[string]any{
 			"id": id, "signal_id": signalID, "source_system": sourceSystem, "source_instance": sourceInstance,
 			"symptom_class": symptomClass, "symptom_class_source": nullableString(symptomSource), "state": state,
-			"site": nullableString(site), "object_id": nullableString(objectID), "resolved": resolved, "title": title,
+			"site": nullableString(site), "object_id": nullableString(objectID),
+			"equipment_type": nullableString(equipmentType), "resolved": resolved, "title": title,
 			"occurred_at": formatISO(occurredAt), "problem_id": nullableInt64(problemID),
+			"priority": nullableString(priority), "status": nullableString(status),
+			"acknowledged_at": nullableISO(acknowledgedAt), "incident_id": nullableInt64(incidentID),
 		})
 	}
 	if err := rows.Err(); err != nil {

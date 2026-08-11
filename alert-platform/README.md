@@ -1,5 +1,7 @@
 # Диспетчер
 
+[![CI](https://github.com/hhanqq/g-v-p/actions/workflows/ci.yml/badge.svg)](https://github.com/hhanqq/g-v-p/actions/workflows/ci.yml)
+
 «Диспетчер» — платформа управления оповещениями об инцидентах для
 промышленного мониторинга (кейс IT Camp: Zabbix + SolarWinds, пилот на
 4 филиалах, 87 пользователей). Задача, которую она решает: сегодня

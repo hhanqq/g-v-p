@@ -107,6 +107,29 @@ jobs:
               summary.write("\n".join(lines) + "\n")
           PY
 
+  postgres-integration:
+    name: 🐘 PostgreSQL · integration + migration тесты
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: alert-platform/go-platform
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: alert-platform/go-platform/go.mod
+          cache-dependency-path: alert-platform/go-platform/go.sum
+
+      # testcontainers-go поднимает pgvector/pgvector:pg16 сам через
+      # Docker, уже предустановленный на ubuntu-24.04 раннерах — не нужен
+      # отдельный сервис-контейнер в этом workflow.
+      - name: Run PostgreSQL integration + migration tests
+        run: go test -tags=integration -count=1 ./internal/pipeline/... ./internal/adminapi/... ./internal/testutil/...
+
   python:
     name: 🐍 Python · tests + Ruff
     runs-on: ubuntu-24.04

@@ -145,6 +145,12 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		writeJSON(response, http.StatusOK, user)
 		return
 	}
+	if server.routeBI(response, request, path) {
+		return
+	}
+	if server.routeBIAdmin(response, request, path) {
+		return
+	}
 	if server.routeGroups(response, request, path) {
 		return
 	}

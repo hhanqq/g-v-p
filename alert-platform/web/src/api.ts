@@ -601,6 +601,17 @@ export interface IntegrationStatus {
   detail: string;
 }
 
+export interface BIServiceAccount {
+  id: number;
+  name: string;
+  token_prefix: string;
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+  last_used_at?: string;
+  scope_count: number;
+}
+
 export interface DeliveryChannelAnalytics {
   channel: string;
   total: number;

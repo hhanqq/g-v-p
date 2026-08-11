@@ -61,6 +61,61 @@ func (client *OllamaClient) Embed(ctx context.Context, text string) []float32 {
 	return decoded.Embedding
 }
 
+// Reachable — легковесная проверка живости Ollama для «Состояние
+// системы» (раздел 24 доп. ТЗ): GET /api/tags ничего не грузит и не
+// занимает GPU, в отличие от Ask/Embed.
+func (client *OllamaClient) Reachable(ctx context.Context) bool {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+"/api/tags", nil)
+	if err != nil {
+		return false
+	}
+	response, err := client.client.Do(request)
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode >= 200 && response.StatusCode < 300
+}
+
+type RunningModel struct {
+	Name     string
+	SizeVRAM int64
+}
+
+// RunningModels — GET /api/ps: модели, реально загруженные в GPU/VRAM
+// прямо сейчас, с SizeVRAM в байтах. Единственный источник настоящих
+// данных о занятой VRAM без доступа к nvidia-smi с хоста (см.
+// platform_health.go — общая емкость GPU конфигурируется отдельно,
+// потому что Ollama API её не отдаёт).
+func (client *OllamaClient) RunningModels(ctx context.Context) ([]RunningModel, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.baseURL+"/api/ps", nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := client.client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("ollama /api/ps returned %d", response.StatusCode)
+	}
+	var decoded struct {
+		Models []struct {
+			Name     string `json:"name"`
+			SizeVRAM int64  `json:"size_vram"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&decoded); err != nil {
+		return nil, err
+	}
+	out := make([]RunningModel, 0, len(decoded.Models))
+	for _, m := range decoded.Models {
+		out = append(out, RunningModel{Name: m.Name, SizeVRAM: m.SizeVRAM})
+	}
+	return out, nil
+}
+
 func (client *OllamaClient) Ask(ctx context.Context, prompt string, numPredict int) *string {
 	payload := map[string]any{
 		"model":      client.model,

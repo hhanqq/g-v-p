@@ -183,6 +183,12 @@ services:
     ports: ["8090:8090"]
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # /hostfs — read-only, только для gopsutil disk.Usage() в «Состояние
+    # системы» (раздел 24-25 доп. ТЗ): без него контейнер видел бы только
+    # свой overlay-диск, а не реальное свободное место на ВМ. Ничего не
+    # пишется через этот путь.
+    volumes:
+      - "/:/hostfs:ro"
     environment:
       DATABASE_URL: postgresql://alert:alert@postgres:5432/alert_platform
       DEMO_RUNNER_URL: http://demo-runner:8091
@@ -197,6 +203,10 @@ services:
       CLICKHOUSE_URL: clickhouse://alert:${CLICKHOUSE_PASSWORD:-alert}@clickhouse:9000/alerting
       OLLAMA_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-log-reader}
+      # Реальная физическая емкость VRAM карты этого хоста (Tesla T4,
+      # `nvidia-smi --query-gpu=memory.total` = 15360 MiB) — Ollama API её
+      # не отдаёт, поэтому задаётся один раз оператором, а не вычисляется.
+      GPU_TOTAL_VRAM_MB: ${GPU_TOTAL_VRAM_MB:-15360}
     depends_on:
       migrate:
         condition: service_completed_successfully

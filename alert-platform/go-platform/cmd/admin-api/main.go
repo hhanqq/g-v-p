@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -57,6 +58,16 @@ func main() {
 	// не ошибка.
 	if ollamaURL := os.Getenv("OLLAMA_URL"); ollamaURL != "" {
 		handler.UseOllama(planner.NewOllamaClient(ollamaURL, valueOr("OLLAMA_MODEL", "log-reader"), "", 35*time.Second))
+	}
+	// GPU_TOTAL_VRAM_MB — реальная физическая емкость VRAM карты хоста
+	// (nvidia-smi --query-gpu=memory.total), задаётся оператором один раз
+	// в .env; не задано — «Состояние системы» показывает VRAM used без
+	// total, не выдуманную емкость (раздел 26 доп. ТЗ).
+	if totalMB, err := strconv.Atoi(os.Getenv("GPU_TOTAL_VRAM_MB")); err == nil && totalMB > 0 {
+		handler.UseGPUCapacity(totalMB)
+	}
+	if gatewayURL := os.Getenv("GATEWAY_HEALTH_URL"); gatewayURL != "" {
+		handler.UseGatewayHealthURL(gatewayURL)
 	}
 	handler.UseSessions(adminapi.NewSessionManager(
 		adminapi.NewLDAPAuthenticator(

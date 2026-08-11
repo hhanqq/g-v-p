@@ -24,6 +24,19 @@ export default function Login() {
     }
   }
 
+  async function onGuestLogin() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.post("/auth/guest-login");
+      await queryClient.invalidateQueries({ queryKey: ["me"] });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Не удалось войти в гостевом режиме");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="relative flex h-screen items-center justify-center bg-bg">
       <ThemeToggle className="absolute right-6 top-6" />
@@ -57,6 +70,20 @@ export default function Login() {
         >
           {busy ? "Проверяю…" : "Войти"}
         </button>
+        <div className="my-4 flex items-center gap-2 text-[11px] text-muted">
+          <div className="h-px flex-1 bg-border" />
+          или
+          <div className="h-px flex-1 bg-border" />
+        </div>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onGuestLogin}
+          className="w-full rounded-md border border-border py-2 text-sm font-medium text-fg hover:bg-fg/5 disabled:opacity-60"
+        >
+          Войти в гостевом режиме
+        </button>
+        <p className="mt-2 text-center text-[11px] text-muted">Просмотр демонстрационных данных без учётной записи</p>
       </form>
     </div>
   );

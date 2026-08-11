@@ -23,15 +23,19 @@ import (
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/availability"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/planner"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/rbac"
 )
 
 type Server struct {
-	pool       *pgxpool.Pool
-	demo       *httputil.ReverseProxy
-	staticDir  string
-	sessions   *SessionManager
-	clickhouse clickhouse.Conn
-	ollama     *planner.OllamaClient
+	pool             *pgxpool.Pool
+	demo             *httputil.ReverseProxy
+	staticDir        string
+	sessions         *SessionManager
+	clickhouse       clickhouse.Conn
+	ollama           *planner.OllamaClient
+	resources        *resourceSampler
+	gpuTotalVRAMMB   int
+	gatewayHealthURL string
 }
 
 func (server *Server) UseSessions(sessions *SessionManager) { server.sessions = sessions }
@@ -51,6 +55,20 @@ func (server *Server) UseClickHouse(conn clickhouse.Conn) { server.clickhouse = 
 // И5, тот же контракт деградации, что у всех остальных ИИ-сценариев.
 func (server *Server) UseOllama(client *planner.OllamaClient) { server.ollama = client }
 
+// UseGPUCapacity — общая физическая емкость VRAM конкретной карты
+// (мегабайты), задаётся один раз оператором из `nvidia-smi
+// --query-gpu=memory.total`: Ollama API её не отдаёт, а сам admin-api
+// не имеет доступа к nvidia-smi без GPU passthrough в контейнер (раздел
+// 26 доп. ТЗ). 0 — «неизвестно», используемая VRAM (реальная, из Ollama
+// /api/ps) в этом случае показывается без total, не с выдуманным
+// значением по умолчанию.
+func (server *Server) UseGPUCapacity(totalMB int) { server.gpuTotalVRAMMB = totalMB }
+
+// UseGatewayHealthURL — переопределяет адрес самодиагностики Gateway
+// (по умолчанию — внутреннее docker-имя сервиса); нужно для тестов и
+// для нестандартных docker-compose топологий.
+func (server *Server) UseGatewayHealthURL(url string) { server.gatewayHealthURL = url }
+
 func New(pool *pgxpool.Pool, demoURL, staticDir string) (*Server, error) {
 	target, err := url.Parse(demoURL)
 	if err != nil {
@@ -60,9 +78,12 @@ func New(pool *pgxpool.Pool, demoURL, staticDir string) (*Server, error) {
 	proxy.ErrorHandler = func(response http.ResponseWriter, _ *http.Request, proxyErr error) {
 		writeError(response, http.StatusBadGateway, "demo runner unavailable: "+proxyErr.Error())
 	}
-	return &Server{
+	server := &Server{
 		pool: pool, demo: proxy, staticDir: staticDir,
-	}, nil
+		resources: newResourceSampler(), gatewayHealthURL: "http://gateway:8080/api/v1/health",
+	}
+	server.resources.start(context.Background())
+	return server, nil
 }
 
 func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -106,16 +127,21 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		server.sessions.login(response, request, server)
 		return
 	}
+	if server.sessions != nil && path == "/api/auth/guest-login" && request.Method == http.MethodPost {
+		server.sessions.guestLogin(response, request)
+		return
+	}
 	if server.sessions != nil && path == "/api/auth/logout" && request.Method == http.MethodPost {
 		server.sessions.logout(response)
 		return
 	}
 	if server.sessions != nil && path == "/api/auth/me" && request.Method == http.MethodGet {
-		user, err := server.sessions.currentUser(request)
+		user, err := server.currentUserWithGrant(request)
 		if err != nil {
 			writeError(response, http.StatusUnauthorized, "Не авторизован")
 			return
 		}
+		delete(user, "_grant")
 		writeJSON(response, http.StatusOK, user)
 		return
 	}
@@ -127,139 +153,147 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/home/summary" {
-		server.withAuth(response, request, server.homeSummary)
+		server.withPermission(response, request, rbac.DashboardRead, server.homeSummary)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/summary" {
-		server.withAuth(response, request, server.analyticsSummary)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsSummary)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/overview" {
-		server.withAuth(response, request, server.analyticsOverview)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsOverview)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/alerts-timeseries" {
-		server.withAuth(response, request, server.analyticsAlertsTimeseries)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsAlertsTimeseries)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/incidents-timeseries" {
-		server.withAuth(response, request, server.analyticsIncidentsTimeseries)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsIncidentsTimeseries)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/delivery" {
-		server.withAuth(response, request, server.analyticsDelivery)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsDelivery)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/sla" {
-		server.withAuth(response, request, server.analyticsSLA)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsSLA)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/equipment-top" {
-		server.withAuth(response, request, server.analyticsEquipmentTop)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsEquipmentTop)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/analytics/scenarios" {
-		server.withAuth(response, request, server.analyticsScenarios)
+		server.withPermission(response, request, rbac.AnalyticsRead, server.analyticsScenarios)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/metrics" {
-		server.withAuth(response, request, server.homeSummary)
+		server.withPermission(response, request, rbac.DashboardRead, server.homeSummary)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/platform-health" {
+		server.withPermission(response, request, rbac.PlatformHealthRead, server.platformHealth)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/incidents" {
-		server.withAuth(response, request, server.listIncidents)
+		server.withPermission(response, request, rbac.IncidentsRead, server.listIncidents)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/incidents/") {
-		server.withAuth(response, request, server.getIncident)
+		server.withPermission(response, request, rbac.IncidentsRead, server.getIncident)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/routing-trace") && strings.HasPrefix(path, "/api/problems/") {
-		server.withAuth(response, request, server.problemRoutingTrace)
+		server.withPermission(response, request, rbac.IncidentsRead, server.problemRoutingTrace)
+		return
+	}
+	if request.Method == http.MethodGet && path == "/api/alerts/filter-options" {
+		server.withPermission(response, request, rbac.AlertsRead, server.alertFilterOptions)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/alerts" {
-		server.withAuth(response, request, server.listAlerts)
+		server.withPermission(response, request, rbac.AlertsRead, server.listAlerts)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/employees" {
-		server.withAuth(response, request, server.listEmployees)
+		server.withPermission(response, request, rbac.EmployeesRead, server.listEmployees)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/employees" {
-		server.withAuth(response, request, server.createEmployee)
+		server.withPermission(response, request, rbac.EmployeesManage, server.createEmployee)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.employeeHistory)
+		server.withPermission(response, request, rbac.EmployeesRead, server.employeeHistory)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/subscription-suggestion") && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.employeeSubscriptionSuggestion)
+		server.withPermission(response, request, rbac.EmployeesRead, server.employeeSubscriptionSuggestion)
 		return
 	}
 	if server.routeEmployeeAvailability(response, request, path) {
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.getEmployee)
+		server.withPermission(response, request, rbac.EmployeesRead, server.getEmployee)
 		return
 	}
 	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/employees/") {
-		server.withAuth(response, request, server.updateEmployee)
+		server.withPermission(response, request, rbac.EmployeesManage, server.updateEmployee)
 		return
 	}
 
 	if request.Method == http.MethodGet && path == "/api/equipment" {
-		server.withAuth(response, request, server.listEquipment)
+		server.withPermission(response, request, rbac.EquipmentRead, server.listEquipment)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/equipment" {
-		server.withAuth(response, request, server.createEquipment)
+		server.withPermission(response, request, rbac.EquipmentManage, server.createEquipment)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/equipment/groups" {
-		server.withAuth(response, request, server.listEquipmentGroups)
+		server.withPermission(response, request, rbac.EquipmentRead, server.listEquipmentGroups)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/equipment/search" {
-		server.withAuth(response, request, server.equipmentSearch)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentSearch)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/history") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentHistory)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentHistory)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/summary") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentSummary)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentSummary)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/incidents") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentIncidentsList)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentIncidentsList)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/timeline") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentTimeline)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentTimeline)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasSuffix(path, "/graph") && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.equipmentGraph)
+		server.withPermission(response, request, rbac.EquipmentRead, server.equipmentGraph)
 		return
 	}
 	if request.Method == http.MethodGet && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.getEquipment)
+		server.withPermission(response, request, rbac.EquipmentRead, server.getEquipment)
 		return
 	}
 	if request.Method == http.MethodPut && strings.HasPrefix(path, "/api/equipment/") {
-		server.withAuth(response, request, server.updateEquipment)
+		server.withPermission(response, request, rbac.EquipmentManage, server.updateEquipment)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/change-history/fields" {
-		server.withAuth(response, request, server.changeHistoryFields)
+		server.withPermission(response, request, rbac.AuditRead, server.changeHistoryFields)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/change-history/search" {
-		server.withAuth(response, request, server.changeHistorySearch)
+		server.withPermission(response, request, rbac.AuditRead, server.changeHistorySearch)
 		return
 	}
 	if server.routeScenarios(response, request, path) {
@@ -269,35 +303,38 @@ func (server *Server) ServeHTTP(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/sla-rules" {
-		server.withAuth(response, request, server.listSLARules)
+		server.withPermission(response, request, rbac.SLARead, server.listSLARules)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/sla-rules" {
-		server.withAuth(response, request, server.createSLARule)
+		server.withPermission(response, request, rbac.SLAManage, server.createSLARule)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/integrations/status" {
-		server.withAuth(response, request, server.integrationsStatus)
+		server.withPermission(response, request, rbac.IntegrationsRead, server.integrationsStatus)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/integrations/delivery-analytics" {
-		server.withAuth(response, request, server.deliveryAnalytics)
+		server.withPermission(response, request, rbac.IntegrationsRead, server.deliveryAnalytics)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/sources" {
-		server.withAuth(response, request, server.listSources)
+		server.withPermission(response, request, rbac.SourcesRead, server.listSources)
 		return
 	}
 	if request.Method == http.MethodPost && path == "/api/sources" {
-		server.withAuth(response, request, server.addSource)
+		server.withPermission(response, request, rbac.SourcesManage, server.addSource)
 		return
 	}
 	if request.Method == http.MethodDelete && strings.HasPrefix(path, "/api/sources/") {
-		server.withAuth(response, request, server.deleteSource)
+		server.withPermission(response, request, rbac.SourcesManage, server.deleteSource)
 		return
 	}
 	if request.Method == http.MethodGet && path == "/api/audit" {
-		server.withAuth(response, request, server.listAudit)
+		server.withPermission(response, request, rbac.AuditRead, server.listAudit)
+		return
+	}
+	if server.routeUsers(response, request, path) {
 		return
 	}
 
@@ -565,30 +602,43 @@ func (server *Server) getIncident(response http.ResponseWriter, request *http.Re
 
 func (server *Server) listAlerts(response http.ResponseWriter, request *http.Request, _ map[string]any) {
 	limit, offset := queryInt(request, "limit", 100), queryInt(request, "offset", 0)
+
+	filterNode, err := resolveAlertFilter(request)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
+	args := make([]any, 0, 8)
+	condition, err := compileFilterNode(filterNode, &args)
+	if err != nil {
+		writeError(response, http.StatusBadRequest, err.Error())
+		return
+	}
 	where := make([]string, 0, 2)
-	args := make([]any, 0, 4)
-	if source := request.URL.Query().Get("source_system"); source != "" {
-		args = append(args, source)
-		where = append(where, fmt.Sprintf("signal.source_system=$%d", len(args)))
+	if condition != "" {
+		where = append(where, condition)
 	}
-	if symptom := request.URL.Query().Get("symptom_class"); symptom != "" {
-		args = append(args, symptom)
-		where = append(where, fmt.Sprintf("event.symptom_class=$%d", len(args)))
+	if rng := parseOptionalRange(request); rng != nil {
+		args = append(args, rng.From)
+		where = append(where, fmt.Sprintf("event.occurred_at >= $%d", len(args)))
+		args = append(args, rng.To)
+		where = append(where, fmt.Sprintf("event.occurred_at < $%d", len(args)))
 	}
-	from := ` FROM events event JOIN signals signal ON signal.id=event.signal_id`
-	condition := ""
+	condition = ""
 	if len(where) > 0 {
 		condition = " WHERE " + strings.Join(where, " AND ")
 	}
 	var total int64
-	if err := server.pool.QueryRow(request.Context(), `SELECT COUNT(*)`+from+condition, args...).Scan(&total); err != nil {
+	if err := server.pool.QueryRow(request.Context(), `SELECT COUNT(*)`+alertFilterFrom+condition, args...).Scan(&total); err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
 		return
 	}
 	args = append(args, limit, offset)
 	query := `SELECT event.id,event.signal_id,signal.source_system,signal.source_instance,event.symptom_class,
 	                 event.symptom_class_source,event.state,event.site,event.object_id,event.resolved,
-	                 event.title,event.occurred_at,event.problem_id` + from + condition +
+	                 event.title,event.occurred_at,event.problem_id,
+	                 problem.priority,problem.status,problem.acknowledged_at,problem.incident_id,cmdb.equipment_type` +
+		alertFilterFrom + condition +
 		fmt.Sprintf(" ORDER BY event.id DESC LIMIT $%d OFFSET $%d", len(args)-1, len(args))
 	rows, err := server.pool.Query(request.Context(), query, args...)
 	if err != nil {
@@ -600,19 +650,25 @@ func (server *Server) listAlerts(response http.ResponseWriter, request *http.Req
 	for rows.Next() {
 		var id, signalID int64
 		var sourceSystem, sourceInstance, symptomClass, state, title string
-		var symptomSource, site, objectID sql.NullString
+		var symptomSource, site, objectID, priority, status, equipmentType sql.NullString
 		var resolved bool
 		var occurredAt time.Time
-		var problemID sql.NullInt64
-		if err := rows.Scan(&id, &signalID, &sourceSystem, &sourceInstance, &symptomClass, &symptomSource, &state, &site, &objectID, &resolved, &title, &occurredAt, &problemID); err != nil {
+		var problemID, incidentID sql.NullInt64
+		var acknowledgedAt sql.NullTime
+		if err := rows.Scan(&id, &signalID, &sourceSystem, &sourceInstance, &symptomClass, &symptomSource, &state,
+			&site, &objectID, &resolved, &title, &occurredAt, &problemID,
+			&priority, &status, &acknowledgedAt, &incidentID, &equipmentType); err != nil {
 			writeError(response, http.StatusInternalServerError, "scan alerts")
 			return
 		}
 		items = append(items, map[string]any{
 			"id": id, "signal_id": signalID, "source_system": sourceSystem, "source_instance": sourceInstance,
 			"symptom_class": symptomClass, "symptom_class_source": nullableString(symptomSource), "state": state,
-			"site": nullableString(site), "object_id": nullableString(objectID), "resolved": resolved, "title": title,
+			"site": nullableString(site), "object_id": nullableString(objectID),
+			"equipment_type": nullableString(equipmentType), "resolved": resolved, "title": title,
 			"occurred_at": formatISO(occurredAt), "problem_id": nullableInt64(problemID),
+			"priority": nullableString(priority), "status": nullableString(status),
+			"acknowledged_at": nullableISO(acknowledgedAt), "incident_id": nullableInt64(incidentID),
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -962,16 +1018,20 @@ func pathInt(path, prefix string) (int64, bool) {
 type authenticatedHandler func(http.ResponseWriter, *http.Request, map[string]any)
 
 func (server *Server) withAuth(response http.ResponseWriter, request *http.Request, next authenticatedHandler) {
-	if server.sessions != nil {
-		user, err := server.sessions.currentUser(request)
-		if err != nil {
-			writeError(response, http.StatusUnauthorized, err.Error())
-			return
-		}
-		next(response, request, user)
+	if server.sessions == nil {
+		writeError(response, http.StatusUnauthorized, "требуется вход")
 		return
 	}
-	writeError(response, http.StatusUnauthorized, "требуется вход")
+	user, err := server.currentUserWithGrant(request)
+	if err != nil {
+		if errors.Is(err, errAccountInactive) {
+			writeError(response, http.StatusForbidden, err.Error())
+			return
+		}
+		writeError(response, http.StatusUnauthorized, err.Error())
+		return
+	}
+	next(response, request, user)
 }
 
 func (server *Server) auditLoginFailure(ctx context.Context, username string) {

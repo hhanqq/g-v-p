@@ -89,6 +89,7 @@ func (auth *LDAPAuthenticator) dial() (*ldap.Conn, error) {
 type sessionPayload struct {
 	Username string `json:"username"`
 	IsAdmin  bool   `json:"is_admin"`
+	Guest    bool   `json:"guest"`
 	Expires  int64  `json:"expires"`
 }
 
@@ -210,7 +211,29 @@ func (manager *SessionManager) currentUser(request *http.Request) (map[string]an
 	if err != nil || payload.Expires <= manager.now().Unix() || payload.Username == "" {
 		return nil, errors.New("требуется вход")
 	}
-	return map[string]any{"username": payload.Username, "is_admin": payload.IsAdmin}, nil
+	return map[string]any{"username": payload.Username, "is_admin": payload.IsAdmin, "guest": payload.Guest}, nil
+}
+
+// guestLogin — раздел 17-18 доп. ТЗ: отдельная кнопка на login page,
+// не общий LDAP-логин. Сессия помечена Guest=true и получает
+// фиксированную read-only роль (rbac.RoleGuest) без обращения к LDAP
+// или platform_users вовсе. Короче обычной сессии (guestLifetime, не
+// manager.lifetime) — гостевой доступ осознанно временный.
+const guestLifetime = 8 * time.Hour
+
+func (manager *SessionManager) guestLogin(response http.ResponseWriter, request *http.Request) {
+	expires := manager.now().Add(guestLifetime)
+	value, err := manager.sign(sessionPayload{Username: "guest", IsAdmin: false, Guest: true, Expires: expires.Unix()})
+	if err != nil {
+		writeError(response, http.StatusInternalServerError, "session unavailable")
+		return
+	}
+	http.SetCookie(response, &http.Cookie{
+		Name: sessionCookieName, Value: value, Path: "/", Expires: expires,
+		MaxAge: int(guestLifetime.Seconds()), HttpOnly: true, Secure: manager.secureCookie,
+		SameSite: http.SameSiteLaxMode,
+	})
+	writeJSON(response, http.StatusOK, map[string]any{"username": "guest", "is_admin": false, "guest": true})
 }
 
 func (manager *SessionManager) sign(payload sessionPayload) (string, error) {

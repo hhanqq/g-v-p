@@ -2,18 +2,19 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   BarChart3, CheckCircle2, ClipboardList, HelpCircle, History, Home,
   PanelLeftClose, PanelLeftOpen, Plug, Server, ShieldCheck, Siren,
-  Timer, Users, UsersRound, Workflow, CalendarDays,
+  Timer, Users, UsersRound, Workflow, CalendarDays, UserCog, Activity,
   type LucideIcon,
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, NavLink } from "react-router-dom";
-import { api, CurrentUser } from "../api";
+import { api, CurrentUser, hasPermission } from "../api";
 import { ThemeToggle } from "../theme";
 
 interface NavLeaf {
   label: string;
   to: string;
   icon: LucideIcon;
+  permission: string;
 }
 
 interface NavGroup {
@@ -23,51 +24,55 @@ interface NavGroup {
 
 // Плоская структура (группа → пункты, без вложенных раскрытий) — так
 // проще сворачивать sidebar в icon-only режим. Пункты, для которых
-// страницы ещё не существуют («Сервисы», «Поиск», «Пользователи и
-// права», «Состояние системы» и т.п. из целевой схемы навигации), сюда
-// не добавлены сознательно — не создаём ссылки на несуществующие экраны.
+// страницы ещё не существуют («Сервисы», «Поиск», «Состояние системы» и
+// т.п. из целевой схемы навигации), сюда не добавлены сознательно — не
+// создаём ссылки на несуществующие экраны. Каждый пункт привязан к
+// permission (раздел 16 доп. ТЗ: состав меню зависит от прав) — это
+// удобство интерфейса, реальная защита — на сервере (withPermission).
 const GROUPS: NavGroup[] = [
-  { title: null, items: [{ label: "Главная", to: "/", icon: Home }] },
+  { title: null, items: [{ label: "Главная", to: "/", icon: Home, permission: "dashboard.read" }] },
   {
     title: "Операции",
     items: [
-      { label: "Алерты", to: "/alerts", icon: ClipboardList },
-      { label: "Инциденты", to: "/incidents", icon: Siren },
+      { label: "Алерты", to: "/alerts", icon: ClipboardList, permission: "alerts.read" },
+      { label: "Инциденты", to: "/incidents", icon: Siren, permission: "incidents.read" },
     ],
   },
   {
     title: "Инфраструктура",
     items: [
-      { label: "Оборудование", to: "/equipment", icon: Server },
-      { label: "Покрытие", to: "/coverage", icon: ShieldCheck },
+      { label: "Оборудование", to: "/equipment", icon: Server, permission: "equipment.read" },
+      { label: "Покрытие", to: "/coverage", icon: ShieldCheck, permission: "coverage.read" },
     ],
   },
   {
     title: "Люди",
     items: [
-      { label: "Сотрудники", to: "/employees", icon: Users },
-      { label: "Календарь", to: "/availability", icon: CalendarDays },
-      { label: "Группы", to: "/groups", icon: UsersRound },
+      { label: "Сотрудники", to: "/employees", icon: Users, permission: "employees.read" },
+      { label: "Календарь", to: "/availability", icon: CalendarDays, permission: "availability.read" },
+      { label: "Группы", to: "/groups", icon: UsersRound, permission: "employees.read" },
     ],
   },
   {
     title: "Автоматизация",
     items: [
-      { label: "Сценарии", to: "/scenarios", icon: Workflow },
-      { label: "SLA", to: "/sla", icon: Timer },
+      { label: "Сценарии", to: "/scenarios", icon: Workflow, permission: "scenarios.read" },
+      { label: "SLA", to: "/sla", icon: Timer, permission: "sla.read" },
     ],
   },
-  { title: "Данные", items: [{ label: "История изменений", to: "/change-history", icon: History }] },
-  { title: null, items: [{ label: "Аналитика", to: "/analytics", icon: BarChart3 }] },
+  { title: "Данные", items: [{ label: "История изменений", to: "/change-history", icon: History, permission: "audit.read" }] },
+  { title: null, items: [{ label: "Аналитика", to: "/analytics", icon: BarChart3, permission: "analytics.read" }] },
   {
     title: "Администрирование",
     items: [
-      { label: "Интеграции", to: "/integrations", icon: Plug },
-      { label: "Источники", to: "/sources", icon: Server },
-      { label: "Аудит", to: "/audit", icon: History },
+      { label: "Интеграции", to: "/integrations", icon: Plug, permission: "integrations.read" },
+      { label: "Источники", to: "/sources", icon: Server, permission: "sources.read" },
+      { label: "Пользователи и права", to: "/users", icon: UserCog, permission: "users.read" },
+      { label: "Аудит", to: "/audit", icon: History, permission: "audit.read" },
+      { label: "Состояние системы", to: "/platform-health", icon: Activity, permission: "platform_health.read" },
     ],
   },
-  { title: null, items: [{ label: "Справка", to: "/help", icon: HelpCircle }] },
+  { title: null, items: [{ label: "Справка", to: "/help", icon: HelpCircle, permission: "help.read" }] },
 ];
 
 const COLLAPSE_KEY = "adp_sidebar_collapsed";
@@ -131,14 +136,17 @@ export default function Sidebar({
         </div>
 
         <nav className="flex-1 overflow-y-auto py-2">
-          {GROUPS.map((group, gi) => (
+          {GROUPS.map((group, gi) => {
+            const items = group.items.filter((item) => hasPermission(user, item.permission));
+            if (items.length === 0) return null;
+            return (
             <div key={gi} className="mb-1">
               {group.title && (
                 <div className={`px-5 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-muted ${collapsed ? "md:hidden" : ""}`}>
                   {group.title}
                 </div>
               )}
-              {group.items.map((item) => (
+              {items.map((item) => (
                 <NavLink
                   key={item.to}
                   to={item.to}
@@ -156,7 +164,8 @@ export default function Sidebar({
                 </NavLink>
               ))}
             </div>
-          ))}
+            );
+          })}
         </nav>
 
         <div className={`border-t border-border px-5 py-4 text-sm md:px-4 ${collapsed ? "md:px-2" : ""}`}>
@@ -171,7 +180,7 @@ export default function Sidebar({
           </Link>
           <div className={`mb-2 ${collapsed ? "md:hidden" : ""}`}>
             <div>{user.username}</div>
-            <div className="text-xs text-muted">{user.is_admin ? "администратор" : "сотрудник"}</div>
+            <div className="text-xs text-muted">{user.role_label}</div>
           </div>
           <button onClick={logout} className="text-xs text-muted hover:text-fg" title="Выйти">
             <span className={collapsed ? "md:hidden" : ""}>Выйти</span>

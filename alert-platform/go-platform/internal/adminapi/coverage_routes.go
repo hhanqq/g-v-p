@@ -13,6 +13,7 @@ import (
 
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/coverage"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/rbac"
 )
 
 // routeCoverage обрабатывает /api/coverage/policies (CRUD) и
@@ -20,7 +21,7 @@ import (
 // internal/coverage.Sweep — не materialized view, см. пакет).
 func (server *Server) routeCoverage(response http.ResponseWriter, request *http.Request, path string) bool {
 	if path == "/api/coverage/gaps" && request.Method == http.MethodGet {
-		server.withAuth(response, request, server.allCoverageGaps)
+		server.withPermission(response, request, rbac.CoverageRead, server.allCoverageGaps)
 		return true
 	}
 	if path != "/api/coverage/policies" && !strings.HasPrefix(path, "/api/coverage/policies/") {
@@ -29,9 +30,9 @@ func (server *Server) routeCoverage(response http.ResponseWriter, request *http.
 	if path == "/api/coverage/policies" {
 		switch request.Method {
 		case http.MethodGet:
-			server.withAuth(response, request, server.listCoveragePolicies)
+			server.withPermission(response, request, rbac.CoverageRead, server.listCoveragePolicies)
 		case http.MethodPost:
-			server.withAuth(response, request, server.createCoveragePolicy)
+			server.withPermission(response, request, rbac.CoverageManage, server.createCoveragePolicy)
 		default:
 			return false
 		}
@@ -47,11 +48,11 @@ func (server *Server) routeCoverage(response http.ResponseWriter, request *http.
 	if len(segments) == 1 {
 		switch request.Method {
 		case http.MethodPut:
-			server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+			server.withPermission(response, request, rbac.CoverageManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 				server.updateCoveragePolicy(w, r, policyID, u)
 			})
 		case http.MethodDelete:
-			server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+			server.withPermission(response, request, rbac.CoverageManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 				server.deleteCoveragePolicy(w, r, policyID, u)
 			})
 		default:
@@ -60,7 +61,7 @@ func (server *Server) routeCoverage(response http.ResponseWriter, request *http.
 		return true
 	}
 	if len(segments) == 2 && segments[1] == "gaps" && request.Method == http.MethodGet {
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
+		server.withPermission(response, request, rbac.CoverageRead, func(w http.ResponseWriter, r *http.Request, _ map[string]any) {
 			server.coveragePolicyGaps(w, r, policyID)
 		})
 		return true

@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/changelog"
+	"github.com/hhanqq/g-v-p/alert-platform/go-platform/internal/rbac"
 )
 
 // routeGroups обрабатывает /api/groups и вложенные под-ресурсы
@@ -26,9 +27,9 @@ func (server *Server) routeGroups(response http.ResponseWriter, request *http.Re
 	if path == "/api/groups" {
 		switch request.Method {
 		case http.MethodGet:
-			server.withAuth(response, request, server.listGroups)
+			server.withPermission(response, request, rbac.EmployeesRead, server.listGroups)
 		case http.MethodPost:
-			server.withAuth(response, request, server.createGroup)
+			server.withPermission(response, request, rbac.EmployeesManage, server.createGroup)
 		default:
 			return false
 		}
@@ -44,18 +45,18 @@ func (server *Server) routeGroups(response http.ResponseWriter, request *http.Re
 	if len(segments) == 1 {
 		switch request.Method {
 		case http.MethodGet:
-			server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, _ map[string]any) { server.getGroup(w, r, groupID) })
+			server.withPermission(response, request, rbac.EmployeesRead, func(w http.ResponseWriter, r *http.Request, _ map[string]any) { server.getGroup(w, r, groupID) })
 		case http.MethodPut:
-			server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) { server.updateGroup(w, r, groupID, u) })
+			server.withPermission(response, request, rbac.EmployeesManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) { server.updateGroup(w, r, groupID, u) })
 		case http.MethodDelete:
-			server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) { server.deleteGroup(w, r, groupID, u) })
+			server.withPermission(response, request, rbac.EmployeesManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) { server.deleteGroup(w, r, groupID, u) })
 		default:
 			return false
 		}
 		return true
 	}
 	if len(segments) == 2 && segments[1] == "members" && request.Method == http.MethodPost {
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+		server.withPermission(response, request, rbac.EmployeesManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 			server.addGroupMember(w, r, groupID, u)
 		})
 		return true
@@ -66,13 +67,13 @@ func (server *Server) routeGroups(response http.ResponseWriter, request *http.Re
 			writeError(response, http.StatusUnprocessableEntity, "invalid subscriber id")
 			return true
 		}
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+		server.withPermission(response, request, rbac.EmployeesManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 			server.removeGroupMember(w, r, groupID, subscriberID, u)
 		})
 		return true
 	}
 	if len(segments) == 2 && segments[1] == "equipment" && request.Method == http.MethodPost {
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+		server.withPermission(response, request, rbac.EmployeesManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 			server.addGroupEquipmentScope(w, r, groupID, u)
 		})
 		return true
@@ -83,7 +84,7 @@ func (server *Server) routeGroups(response http.ResponseWriter, request *http.Re
 			writeError(response, http.StatusUnprocessableEntity, "invalid scope id")
 			return true
 		}
-		server.withAuth(response, request, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
+		server.withPermission(response, request, rbac.EmployeesManage, func(w http.ResponseWriter, r *http.Request, u map[string]any) {
 			server.removeGroupEquipmentScope(w, r, groupID, scopeID, u)
 		})
 		return true

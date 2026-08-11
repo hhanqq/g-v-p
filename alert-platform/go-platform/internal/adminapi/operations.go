@@ -46,19 +46,7 @@ func (server *Server) isDemoRoute(method, path string) bool {
 		method == http.MethodPost && strings.HasPrefix(path, "/api/trigger/")
 }
 
-func requireAdmin(response http.ResponseWriter, user map[string]any) bool {
-	isAdmin, _ := user["is_admin"].(bool)
-	if !isAdmin {
-		writeError(response, http.StatusForbidden, "требуется роль администратора")
-		return false
-	}
-	return true
-}
-
-func (server *Server) listSources(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
+func (server *Server) listSources(response http.ResponseWriter, request *http.Request, _ map[string]any) {
 	rows, err := server.pool.Query(request.Context(), `SELECT id,instance,system,site,api_token,created_at FROM source_instances ORDER BY instance`)
 	if err != nil {
 		writeError(response, http.StatusServiceUnavailable, "database unavailable")
@@ -111,9 +99,6 @@ type sourceRequest struct {
 }
 
 func (server *Server) addSource(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
 	var payload sourceRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -181,9 +166,6 @@ func generateSourceToken() (string, error) {
 }
 
 func (server *Server) deleteSource(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
 	rawID := strings.Trim(strings.TrimPrefix(normalizePath(request.URL.Path), "/api/sources/"), "/")
 	id, err := strconv.ParseInt(rawID, 10, 64)
 	if err != nil {
@@ -224,10 +206,7 @@ func (server *Server) deleteSource(response http.ResponseWriter, request *http.R
 	response.WriteHeader(http.StatusNoContent)
 }
 
-func (server *Server) listAudit(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
+func (server *Server) listAudit(response http.ResponseWriter, request *http.Request, _ map[string]any) {
 	limit := queryInt(request, "limit", 200)
 	if limit < 1 || limit > 1000 {
 		limit = 200

@@ -39,9 +39,6 @@ func generateAccessToken() (string, error) {
 }
 
 func (server *Server) createEmployee(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
 	var payload employeeCreateRequest
 	decoder := json.NewDecoder(http.MaxBytesReader(response, request.Body, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -111,9 +108,6 @@ type employeeUpdateRequest struct {
 // updateEquipment/updateGroup: пустое или отсутствующее поле не меняет
 // значение. Active — отдельно, т.к. это bool, а не text.
 func (server *Server) updateEmployee(response http.ResponseWriter, request *http.Request, user map[string]any) {
-	if !requireAdmin(response, user) {
-		return
-	}
 	id, ok := pathInt(normalizePath(request.URL.Path), "/api/employees/")
 	if !ok {
 		writeError(response, http.StatusUnprocessableEntity, "invalid employee id")

@@ -12,6 +12,16 @@ export class ApiError extends Error {
   }
 }
 
+// isGuestSession — обновляется из useCurrentUser() при каждом успешном
+// /auth/me. Раздел 19 доп. ТЗ: гость должен видеть именно «Недоступно в
+// гостевом режиме», а не сырое «недостаточно прав: sla.manage» — backend
+// уже честно возвращает 403 в обоих случаях (реальное ограничение прав),
+// здесь только косметика сообщения для конкретно гостевой сессии.
+let isGuestSession = false;
+export function setGuestSessionFlag(guest: boolean) {
+  isGuestSession = guest;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     ...init,
@@ -19,6 +29,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
   if (!res.ok) {
+    if (res.status === 403 && isGuestSession) {
+      throw new ApiError(res.status, "Недоступно в гостевом режиме");
+    }
     const body = await res.json().catch(() => ({}));
     throw new ApiError(res.status, body.detail ?? res.statusText);
   }
@@ -38,6 +51,71 @@ export const api = {
 export interface CurrentUser {
   username: string;
   is_admin: boolean;
+  guest: boolean;
+  role: string;
+  role_label: string;
+  permissions: string[];
+  scopes: { type: string; value: string }[];
+  platform_user_id: number;
+}
+
+export function hasPermission(user: CurrentUser | undefined, permission: string): boolean {
+  return !!user?.permissions?.includes(permission);
+}
+
+export interface PlatformUserListItem {
+  id: number;
+  username: string;
+  role: string;
+  role_label: string;
+  active: boolean;
+  override_count: number;
+  scope_count: number;
+}
+
+export interface PlatformUserDetail {
+  id: number;
+  username: string;
+  role: string;
+  role_label: string;
+  active: boolean;
+  overrides: { permission: string; effect: "grant" | "deny" }[];
+  scopes: { type: string; value: string }[];
+  effective_permissions: string[];
+}
+
+export interface ComponentStatus {
+  name: string;
+  status: "normal" | "degraded" | "unknown";
+  detail?: string;
+}
+
+export interface PlatformHealth {
+  components: ComponentStatus[];
+  resources: {
+    cpu_pct?: number;
+    cpu_series: number[];
+    ram_pct?: number;
+    ram_used_gb?: number;
+    ram_total_gb?: number;
+    ram_series: number[];
+    disk_pct?: number;
+    disk_used_gb?: number;
+    disk_total_gb?: number;
+  };
+  ai: {
+    ollama_available: boolean;
+    gpu: "unavailable" | { vram_used_gb: number; vram_total_gb: number };
+    requests_per_min_last_hour?: number;
+    inference_p95_seconds?: number | null;
+  };
+}
+
+export interface RBACMeta {
+  roles: { value: string; label: string }[];
+  permissions: { value: string; label: string }[];
+  role_permissions: Record<string, string[]>;
+  scope_types: { value: string; label: string }[];
 }
 
 export interface HomeSummary {
@@ -119,10 +197,33 @@ export interface AlertItem {
   state: string;
   site: string | null;
   object_id: string | null;
+  equipment_type: string | null;
   resolved: boolean;
   title: string;
   occurred_at: string;
   problem_id: number | null;
+  priority: string | null;
+  status: string | null;
+  acknowledged_at: string | null;
+  incident_id: number | null;
+}
+
+// FilterNode — зеркало Go internal/adminapi.FilterNode: и панель быстрых
+// фильтров, и Query Builder собирают ровно эту структуру, единая точка
+// компиляции в SQL — на backend (см. alert_filter.go).
+export interface FilterNode {
+  match?: "all" | "any";
+  conditions?: FilterNode[];
+  field?: string;
+  op?: string;
+  value?: string | string[] | number | boolean;
+}
+
+export interface AlertFilterOptions {
+  priorities: string[];
+  sources: string[];
+  statuses: { value: string; label: string }[];
+  reactions: { value: string; label: string }[];
 }
 
 export interface EquipmentListItem {
